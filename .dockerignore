@@ -1,0 +1,11 @@
+node_modules
+.next
+dist
+.git
+*.log
+.env
+.env.local
+coverage
+playwright-report
+test-results
+packages/shared/prisma/migrations

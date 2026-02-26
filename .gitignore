@@ -1,0 +1,30 @@
+node_modules/
+.env
+.env.local
+.env.*.local
+.next/
+dist/
+build/
+*.js.map
+*.d.ts.map
+
+# Prisma
+packages/shared/prisma/migrations/
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# Testing
+coverage/
+playwright-report/
+test-results/

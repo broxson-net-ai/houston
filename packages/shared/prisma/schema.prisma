@@ -1,0 +1,201 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum TaskStatus {
+  QUEUE
+  IN_PROGRESS
+  DONE
+  FAILED
+}
+
+enum TaskRunStatus {
+  ACCEPTED
+  RUNNING
+  COMPLETED
+  FAILED
+}
+
+enum TaskEventType {
+  CREATED
+  SCHEDULED
+  QUEUED
+  DISPATCHED
+  STARTED
+  COMPLETED
+  FAILED
+  MISSED
+  STATUS_CHANGED
+  ARCHIVED
+}
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  createdAt    DateTime @default(now())
+
+  @@map("users")
+}
+
+model Agent {
+  id         String    @id @default(cuid())
+  name       String
+  avatarUrl  String?
+  routingKey String    @unique
+  enabled    Boolean   @default(true)
+  tags       Json      @default("[]")
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+  templates  Template[]
+  tasks      Task[]
+
+  @@map("agents")
+}
+
+model PreInstructionsVersion {
+  id        String   @id @default(cuid())
+  version   Int
+  content   String
+  isActive  Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  @@map("pre_instructions_versions")
+}
+
+model Template {
+  id             String     @id @default(cuid())
+  name           String
+  defaultAgentId String?
+  defaultAgent   Agent?     @relation(fields: [defaultAgentId], references: [id])
+  skillRef       String?
+  instructions   String
+  tags           Json       @default("[]")
+  priority       Int        @default(0)
+  enabled        Boolean    @default(true)
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
+  schedules      Schedule[]
+  tasks          Task[]
+
+  @@map("templates")
+}
+
+model Schedule {
+  id            String    @id @default(cuid())
+  templateId    String
+  template      Template  @relation(fields: [templateId], references: [id])
+  cron          String
+  timezone      String    @default("America/Los_Angeles")
+  enabled       Boolean   @default(true)
+  nextRunAt     DateTime?
+  lastRunAt     DateTime?
+  missedCount   Int       @default(0)
+  lastMissedAt  DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  tasks         Task[]
+  taskEvents    TaskEvent[]
+
+  @@map("schedules")
+}
+
+model Task {
+  id                           String      @id @default(cuid())
+  title                        String
+  templateId                   String?
+  template                     Template?   @relation(fields: [templateId], references: [id])
+  scheduleId                   String?
+  schedule                     Schedule?   @relation(fields: [scheduleId], references: [id])
+  agentId                      String?
+  agent                        Agent?      @relation(fields: [agentId], references: [id])
+  dueAt                        DateTime?
+  status                       TaskStatus  @default(QUEUE)
+  instructionsOverride         String?
+  assembledInstructionsSnapshot String?
+  preInstructionsVersion       String?
+  archivedAt                   DateTime?
+  createdAt                    DateTime    @default(now())
+  updatedAt                    DateTime    @updatedAt
+  taskRuns                     TaskRun[]
+  taskEvents                   TaskEvent[]
+
+  @@map("tasks")
+}
+
+model TaskRun {
+  id              String        @id @default(cuid())
+  taskId          String
+  task            Task          @relation(fields: [taskId], references: [id])
+  attemptNumber   Int           @default(1)
+  dispatchedAt    DateTime?
+  startedAt       DateTime?
+  finishedAt      DateTime?
+  status          TaskRunStatus @default(ACCEPTED)
+  wsRequestId     String?
+  gatewayRunId    String?
+  requestPayload  Json?
+  responsePayload Json?
+  errorText       String?
+  idempotencyKey  String?       @unique
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+  taskLogs        TaskLog[]
+  taskEvents      TaskEvent[]
+
+  @@map("task_runs")
+}
+
+model TaskLog {
+  id        String   @id @default(cuid())
+  taskRunId String
+  taskRun   TaskRun  @relation(fields: [taskRunId], references: [id])
+  logText   String
+  truncated Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  @@map("task_logs")
+}
+
+model TaskEvent {
+  id         String        @id @default(cuid())
+  taskId     String?
+  task       Task?         @relation(fields: [taskId], references: [id])
+  scheduleId String?
+  schedule   Schedule?     @relation(fields: [scheduleId], references: [id])
+  taskRunId  String?
+  taskRun    TaskRun?      @relation(fields: [taskRunId], references: [id])
+  type       TaskEventType
+  message    String?
+  metadata   Json?
+  createdAt  DateTime      @default(now())
+
+  @@map("task_events")
+}
+
+model SkillsCache {
+  id            String   @id @default(cuid())
+  name          String   @unique
+  path          String
+  mtime         DateTime
+  hash          String
+  summary       String?
+  lastScannedAt DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@map("skills_cache")
+}
+
+model SystemStatus {
+  id        String   @id @default(cuid())
+  key       String   @unique
+  value     Json
+  updatedAt DateTime @updatedAt
+
+  @@map("system_status")
+}
