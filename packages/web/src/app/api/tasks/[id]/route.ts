@@ -46,7 +46,12 @@ export async function PATCH(
   }
 
   const body = await req.json();
-  const { title, agentId, dueAt, archivedAt } = body;
+  const { title, agentId, dueAt, archivedAt, status } = body;
+
+  const VALID_STATUSES = ["QUEUE", "IN_PROGRESS", "DONE", "FAILED"];
+  if (status !== undefined && !VALID_STATUSES.includes(status)) {
+    return NextResponse.json({ error: "Invalid status" }, { status: 400 });
+  }
 
   const updated = await db.task.update({
     where: { id: params.id },
@@ -57,6 +62,7 @@ export async function PATCH(
       ...(archivedAt !== undefined && {
         archivedAt: archivedAt ? new Date(archivedAt) : null,
       }),
+      ...(status !== undefined && { status }),
     },
     include: { agent: true, template: true },
   });
@@ -67,6 +73,14 @@ export async function PATCH(
         taskId: params.id,
         type: archivedAt ? "ARCHIVED" : "STATUS_CHANGED",
         message: archivedAt ? "Task archived" : "Task unarchived",
+      },
+    });
+  } else if (status !== undefined && status !== task.status) {
+    await db.taskEvent.create({
+      data: {
+        taskId: params.id,
+        type: "STATUS_CHANGED",
+        message: `Status changed from ${task.status} to ${status}`,
       },
     });
   }

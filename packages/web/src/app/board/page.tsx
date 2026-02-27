@@ -1,6 +1,15 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
+import {
+  DndContext,
+  DragEndEvent,
+  DragOverlay,
+  DragStartEvent,
+  useDroppable,
+  useDraggable,
+} from "@dnd-kit/core";
+import { CSS } from "@dnd-kit/utilities";
 import { Nav } from "@/components/nav";
 
 type Agent = { id: string; name: string; routingKey: string; avatarUrl?: string | null };
@@ -85,7 +94,8 @@ function TaskCard({ task, onAction }: { task: Task; onAction: () => void }) {
       </div>
       <div className="flex gap-1 pt-1">
         <button
-          onClick={async () => {
+          onClick={async (e) => {
+            e.stopPropagation();
             await fetch(`/api/tasks/${task.id}/dispatch`, { method: "POST" });
             onAction();
           }}
@@ -95,7 +105,8 @@ function TaskCard({ task, onAction }: { task: Task; onAction: () => void }) {
         </button>
         {task.status === "FAILED" && (
           <button
-            onClick={async () => {
+            onClick={async (e) => {
+              e.stopPropagation();
               await fetch(`/api/tasks/${task.id}/retry`, { method: "POST" });
               onAction();
             }}
@@ -105,7 +116,8 @@ function TaskCard({ task, onAction }: { task: Task; onAction: () => void }) {
           </button>
         )}
         <button
-          onClick={async () => {
+          onClick={async (e) => {
+            e.stopPropagation();
             await fetch(`/api/tasks/${task.id}`, {
               method: "PATCH",
               headers: { "Content-Type": "application/json" },
@@ -122,6 +134,60 @@ function TaskCard({ task, onAction }: { task: Task; onAction: () => void }) {
   );
 }
 
+function DroppableColumn({
+  id,
+  children,
+  className,
+}: {
+  id: string;
+  children: React.ReactNode;
+  className?: string;
+}) {
+  const { setNodeRef, isOver } = useDroppable({ id });
+  return (
+    <div
+      ref={setNodeRef}
+      className={`${className ?? ""} ${isOver ? "ring-2 ring-primary/50 bg-primary/5 rounded-lg" : ""}`}
+    >
+      {children}
+    </div>
+  );
+}
+
+function DraggableTaskCard({ task, onAction }: { task: Task; onAction: () => void }) {
+  const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
+    id: task.id,
+  });
+  const style = transform ? { transform: CSS.Translate.toString(transform) } : undefined;
+
+  return (
+    <div
+      ref={setNodeRef}
+      style={style}
+      {...attributes}
+      className={isDragging ? "opacity-40" : ""}
+    >
+      <div {...listeners} className="cursor-grab active:cursor-grabbing">
+        <TaskCard task={task} onAction={onAction} />
+      </div>
+    </div>
+  );
+}
+
+function findTaskInStatusData(taskId: string, data: StatusGrouped): Task | undefined {
+  for (const key of ["QUEUE", "IN_PROGRESS", "DONE", "FAILED"] as const) {
+    const found = data[key].find((t) => t.id === taskId);
+    if (found) return found;
+  }
+}
+
+function findTaskInAgentData(taskId: string, data: AgentGrouped): Task | undefined {
+  for (const tasks of Object.values(data)) {
+    const found = tasks.find((t) => t.id === taskId);
+    if (found) return found;
+  }
+}
+
 export default function BoardPage() {
   const [view, setView] = useState<"status" | "agent">("status");
   const [statusData, setStatusData] = useState<StatusGrouped | null>(null);
@@ -131,6 +197,7 @@ export default function BoardPage() {
   const [filterAgent, setFilterAgent] = useState("");
   const [showArchived, setShowArchived] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [activeTask, setActiveTask] = useState<Task | null>(null);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -159,6 +226,80 @@ export default function BoardPage() {
     const timer = setTimeout(fetchData, 300);
     return () => clearTimeout(timer);
   }, [fetchData]);
+
+  function handleDragStart(event: DragStartEvent) {
+    const taskId = event.active.id as string;
+    if (statusData) {
+      const task = findTaskInStatusData(taskId, statusData);
+      if (task) { setActiveTask(task); return; }
+    }
+    if (agentData) {
+      const task = findTaskInAgentData(taskId, agentData);
+      if (task) { setActiveTask(task); return; }
+    }
+  }
+
+  async function handleStatusDragEnd(event: DragEndEvent) {
+    const { active, over } = event;
+    setActiveTask(null);
+    if (!over || !statusData) return;
+
+    const taskId = active.id as string;
+    const newStatus = over.id as string;
+    const task = findTaskInStatusData(taskId, statusData);
+    if (!task || task.status === newStatus) return;
+
+    // Optimistic update
+    const prev = statusData;
+    setStatusData((current) => {
+      if (!current) return current;
+      const updated = { ...current } as StatusGrouped;
+      for (const key of ["QUEUE", "IN_PROGRESS", "DONE", "FAILED"] as const) {
+        updated[key] = current[key].filter((t) => t.id !== taskId);
+      }
+      const newKey = newStatus as keyof Omit<StatusGrouped, "scheduled">;
+      updated[newKey] = [...updated[newKey], { ...task, status: newStatus }];
+      return updated;
+    });
+
+    const res = await fetch(`/api/tasks/${taskId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status: newStatus }),
+    });
+    if (!res.ok) setStatusData(prev);
+  }
+
+  async function handleAgentDragEnd(event: DragEndEvent) {
+    const { active, over } = event;
+    setActiveTask(null);
+    if (!over || !agentData) return;
+
+    const taskId = active.id as string;
+    const newAgentId = over.id as string;
+    const task = findTaskInAgentData(taskId, agentData);
+    if (!task || task.agentId === newAgentId) return;
+
+    // Optimistic update
+    const prev = agentData;
+    setAgentData((current) => {
+      if (!current) return current;
+      const updated: AgentGrouped = {};
+      for (const [aid, tasks] of Object.entries(current)) {
+        updated[aid] = tasks.filter((t) => t.id !== taskId);
+      }
+      const newAgent = agents.find((a) => a.id === newAgentId) ?? null;
+      updated[newAgentId] = [...(updated[newAgentId] ?? []), { ...task, agentId: newAgentId, agent: newAgent }];
+      return updated;
+    });
+
+    const res = await fetch(`/api/tasks/${taskId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ agentId: newAgentId }),
+    });
+    if (!res.ok) setAgentData(prev);
+  }
 
   return (
     <div className="min-h-screen bg-background">
@@ -217,60 +358,70 @@ export default function BoardPage() {
 
         {/* Status View */}
         {view === "status" && statusData && (
-          <div className="grid grid-cols-5 gap-4">
-            {/* Scheduled column */}
-            <div className="space-y-2">
-              <h2 className="font-semibold text-sm text-muted-foreground uppercase tracking-wide">
-                Scheduled ({statusData.scheduled?.length ?? 0})
-              </h2>
-              {statusData.scheduled?.map((s) => (
-                <div key={s.id} className="bg-card border rounded-lg p-3 space-y-1">
-                  <p className="text-sm font-medium">{s.template.name}</p>
-                  {s.template.defaultAgent && (
-                    <p className="text-xs text-muted-foreground">{s.template.defaultAgent.name}</p>
-                  )}
-                  <p className="text-xs text-muted-foreground">
-                    {new Date(s.nextRunAt).toLocaleString()}
-                  </p>
-                </div>
-              ))}
-            </div>
+          <DndContext onDragStart={handleDragStart} onDragEnd={handleStatusDragEnd}>
+            <div className="grid grid-cols-5 gap-4">
+              {/* Scheduled column — read-only, not droppable */}
+              <div className="space-y-2">
+                <h2 className="font-semibold text-sm text-muted-foreground uppercase tracking-wide">
+                  Scheduled ({statusData.scheduled?.length ?? 0})
+                </h2>
+                {statusData.scheduled?.map((s) => (
+                  <div key={s.id} className="bg-card border rounded-lg p-3 space-y-1">
+                    <p className="text-sm font-medium">{s.template.name}</p>
+                    {s.template.defaultAgent && (
+                      <p className="text-xs text-muted-foreground">{s.template.defaultAgent.name}</p>
+                    )}
+                    <p className="text-xs text-muted-foreground">
+                      {new Date(s.nextRunAt).toLocaleString()}
+                    </p>
+                  </div>
+                ))}
+              </div>
 
-            {/* Queue, In Progress, Done, Failed columns */}
-            {(["Queue", "In Progress", "Done", "Failed"] as const).map((col) => {
-              const key = STATUS_MAP[col];
-              const items = statusData[key] ?? [];
-              return (
-                <div key={col} className="space-y-2">
-                  <h2 className="font-semibold text-sm text-muted-foreground uppercase tracking-wide">
-                    {col} ({items.length})
-                  </h2>
-                  {items.map((task) => (
-                    <TaskCard key={task.id} task={task} onAction={fetchData} />
-                  ))}
-                </div>
-              );
-            })}
-          </div>
+              {/* Queue, In Progress, Done, Failed columns */}
+              {(["Queue", "In Progress", "Done", "Failed"] as const).map((col) => {
+                const key = STATUS_MAP[col];
+                const items = statusData[key] ?? [];
+                return (
+                  <DroppableColumn key={col} id={key} className="space-y-2">
+                    <h2 className="font-semibold text-sm text-muted-foreground uppercase tracking-wide">
+                      {col} ({items.length})
+                    </h2>
+                    {items.map((task) => (
+                      <DraggableTaskCard key={task.id} task={task} onAction={fetchData} />
+                    ))}
+                  </DroppableColumn>
+                );
+              })}
+            </div>
+            <DragOverlay>
+              {activeTask ? <TaskCard task={activeTask} onAction={() => {}} /> : null}
+            </DragOverlay>
+          </DndContext>
         )}
 
         {/* Agent View */}
         {view === "agent" && agentData && (
-          <div className="flex gap-4 overflow-x-auto pb-4">
-            {Object.entries(agentData).map(([agentId, tasks]) => {
-              const agent = agents.find((a) => a.id === agentId);
-              return (
-                <div key={agentId} className="min-w-[220px] space-y-2">
-                  <h2 className="font-semibold text-sm text-muted-foreground uppercase tracking-wide">
-                    {agent?.name ?? "Unassigned"} ({tasks.length})
-                  </h2>
-                  {tasks.map((task) => (
-                    <TaskCard key={task.id} task={task} onAction={fetchData} />
-                  ))}
-                </div>
-              );
-            })}
-          </div>
+          <DndContext onDragStart={handleDragStart} onDragEnd={handleAgentDragEnd}>
+            <div className="flex gap-4 overflow-x-auto pb-4">
+              {Object.entries(agentData).map(([agentId, tasks]) => {
+                const agent = agents.find((a) => a.id === agentId);
+                return (
+                  <DroppableColumn key={agentId} id={agentId} className="min-w-[220px] space-y-2">
+                    <h2 className="font-semibold text-sm text-muted-foreground uppercase tracking-wide">
+                      {agent?.name ?? "Unassigned"} ({tasks.length})
+                    </h2>
+                    {tasks.map((task) => (
+                      <DraggableTaskCard key={task.id} task={task} onAction={fetchData} />
+                    ))}
+                  </DroppableColumn>
+                );
+              })}
+            </div>
+            <DragOverlay>
+              {activeTask ? <TaskCard task={activeTask} onAction={() => {}} /> : null}
+            </DragOverlay>
+          </DndContext>
         )}
       </div>
     </div>
