@@ -105,6 +105,27 @@ model Schedule {
   @@map("schedules")
 }
 
+enum ProjectStatus {
+  DRAFT
+  ACTIVE
+  PAUSED
+  DONE
+}
+
+model Project {
+  id          String   @id @default(cuid())
+  slug        String   @unique
+  title       String
+  status      ProjectStatus @default(DRAFT)
+  metadata    Json?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  tasks       Task[]
+
+  @@map("projects")
+}
+
 model Task {
   id                           String      @id @default(cuid())
   title                        String
@@ -116,6 +137,8 @@ model Task {
   agent                        Agent?      @relation(fields: [agentId], references: [id])
   dueAt                        DateTime?
   status                       TaskStatus  @default(QUEUE)
+  projectId                    String?
+  project                      Project?     @relation(fields: [projectId], references: [id])
   instructionsOverride         String?
   assembledInstructionsSnapshot String?
   preInstructionsVersion       String?
