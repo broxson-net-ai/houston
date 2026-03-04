@@ -1,8 +1,11 @@
+import "dotenv/config";
+
 import { scanSkills } from "./skills-scanner.js";
 import { HoustonScheduler } from "./scheduler.js";
 import { GatewayClient } from "./gateway.js";
 import { DispatchService } from "./dispatcher.js";
 import { GatewayEventHandler } from "./events.js";
+import { db } from "@houston/shared";
 
 const SKILLS_PATH = process.env.OPENCLAW_SKILLS_PATH ?? "";
 const SKILLS_SCAN_INTERVAL_MS = 60_000;
@@ -46,6 +49,28 @@ async function main() {
     console.warn("[worker] OPENCLAW_GATEWAY_URL not set; gateway client disabled");
   }
 
+  const HEARTBEAT_KEY = "gateway_last_heartbeat";
+  const HEARTBEAT_INTERVAL_MS = 15_000;
+  let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+
+  const writeHeartbeat = async () => {
+    if (!gatewayClient || !gatewayClient.isConnected()) return;
+    const timestamp = new Date().toISOString();
+    await db.systemStatus.upsert({
+      where: { key: HEARTBEAT_KEY },
+      create: { key: HEARTBEAT_KEY, value: { timestamp } },
+      update: { value: { timestamp } },
+    });
+  };
+
+  if (gatewayClient) {
+    heartbeatTimer = setInterval(() => {
+      writeHeartbeat().catch((err) => {
+        console.error("[worker] Failed to write gateway heartbeat:", err);
+      });
+    }, HEARTBEAT_INTERVAL_MS);
+  }
+
   // Dispatcher
   const dispatchService = new DispatchService(gatewayClient);
 
@@ -64,6 +89,7 @@ async function main() {
   const shutdown = async (signal: string) => {
     console.log(`[worker] ${signal} received, shutting down...`);
     await scheduler.stop();
+    if (heartbeatTimer) clearInterval(heartbeatTimer);
     if (gatewayClient) {
       gatewayClient.disconnect();
     }

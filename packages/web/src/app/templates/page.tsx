@@ -25,9 +25,15 @@ type Template = {
   schedules: Schedule[];
 };
 
+type Project = {
+  slug: string;
+  name: string;
+};
+
 export default function TemplatesPage() {
   const [templates, setTemplates] = useState<Template[]>([]);
   const [agents, setAgents] = useState<Agent[]>([]);
+  const [projects, setProjects] = useState<Project[]>([]);
   const [showDialog, setShowDialog] = useState(false);
   const [editing, setEditing] = useState<Template | null>(null);
   const [showScheduleDialog, setShowScheduleDialog] = useState<string | null>(null);
@@ -37,38 +43,57 @@ export default function TemplatesPage() {
     skillRef: "",
     instructions: "",
     tags: "",
+    projectSlug: "",
     priority: 0,
     enabled: true,
   });
   const [scheduleForm, setScheduleForm] = useState({ cron: "", preset: "", timezone: "America/Los_Angeles", enabled: true });
+  const [projectFilter, setProjectFilter] = useState("");
   const [error, setError] = useState("");
 
   async function load() {
-    const [tRes, aRes] = await Promise.all([
+    const [tRes, aRes, pRes] = await Promise.all([
       fetch("/api/templates"),
       fetch("/api/agents"),
+      fetch("/api/projects"),
     ]);
     setTemplates(await tRes.json());
     setAgents(await aRes.json());
+    const projectsData = await pRes.json();
+    setProjects(projectsData.projects ?? []);
   }
 
   useEffect(() => { load(); }, []);
 
+  const filteredTemplates = projectFilter
+    ? templates.filter((template) =>
+        (template.tags as string[]).some(
+          (tag) => tag === `project:${projectFilter}`
+        )
+      )
+    : templates;
+
+  function findProjectTag(tags: string[]) {
+    return tags.find((tag) => tag.startsWith("project:"))?.slice("project:".length) ?? "";
+  }
+
   function openCreate() {
     setEditing(null);
-    setForm({ name: "", defaultAgentId: "", skillRef: "", instructions: "", tags: "", priority: 0, enabled: true });
+    setForm({ name: "", defaultAgentId: "", skillRef: "", instructions: "", tags: "", projectSlug: "", priority: 0, enabled: true });
     setError("");
     setShowDialog(true);
   }
 
   function openEdit(t: Template) {
+    const tagList = (t.tags as string[]);
     setEditing(t);
     setForm({
       name: t.name,
       defaultAgentId: t.defaultAgentId ?? "",
       skillRef: t.skillRef ?? "",
       instructions: t.instructions,
-      tags: (t.tags as string[]).join(", "),
+      tags: tagList.join(", "),
+      projectSlug: findProjectTag(tagList),
       priority: t.priority,
       enabled: t.enabled,
     });
@@ -79,12 +104,18 @@ export default function TemplatesPage() {
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError("");
+    const baseTags = form.tags.split(",").map((t) => t.trim()).filter(Boolean);
+    const filteredTags = baseTags.filter((tag) => !tag.startsWith("project:"));
+    if (form.projectSlug) {
+      filteredTags.push(`project:${form.projectSlug}`);
+    }
+
     const payload = {
       name: form.name,
       defaultAgentId: form.defaultAgentId || null,
       skillRef: form.skillRef || null,
       instructions: form.instructions,
-      tags: form.tags.split(",").map((t) => t.trim()).filter(Boolean),
+      tags: filteredTags,
       priority: form.priority,
       enabled: form.enabled,
     };
@@ -123,21 +154,46 @@ export default function TemplatesPage() {
     <div className="min-h-screen bg-background">
       <Nav />
       <div className="container mx-auto px-4 py-6 space-y-4">
-        <div className="flex items-center justify-between">
+        <div className="flex flex-wrap items-center justify-between gap-4">
           <h1 className="text-2xl font-bold">Templates</h1>
-          <button onClick={openCreate} className="px-3 py-1.5 text-sm bg-primary text-primary-foreground rounded-md font-medium hover:opacity-90">
-            New Template
-          </button>
+          <div className="flex items-center gap-3">
+            <select
+              className="px-3 py-1.5 text-sm border rounded-md bg-background"
+              value={projectFilter}
+              onChange={(e) => setProjectFilter(e.target.value)}
+            >
+              <option value="">All projects</option>
+              {projects.map((project) => (
+                <option key={project.slug} value={project.slug}>
+                  {project.name}
+                </option>
+              ))}
+            </select>
+            <button onClick={openCreate} className="px-3 py-1.5 text-sm bg-primary text-primary-foreground rounded-md font-medium hover:opacity-90">
+              New Template
+            </button>
+          </div>
         </div>
 
         <div className="space-y-4">
-          {templates.map((t) => (
+          {filteredTemplates.map((t) => (
             <div key={t.id} className="border rounded-lg p-4 space-y-3">
               <div className="flex items-center justify-between">
                 <div>
                   <h3 className="font-semibold">{t.name}</h3>
                   {t.defaultAgent && <p className="text-sm text-muted-foreground">Agent: {t.defaultAgent.name}</p>}
                   {t.skillRef && <p className="text-xs text-muted-foreground">Skill: {t.skillRef}</p>}
+                  {(t.tags as string[]).some((tag) => tag.startsWith("project:")) && (
+                    <div className="mt-1 flex flex-wrap gap-2">
+                      {(t.tags as string[])
+                        .filter((tag) => tag.startsWith("project:"))
+                        .map((tag) => (
+                          <span key={tag} className="text-xs rounded-full border px-2 py-0.5 text-muted-foreground">
+                            {tag.replace("project:", "Project: ")}
+                          </span>
+                        ))}
+                    </div>
+                  )}
                 </div>
                 <div className="flex gap-2">
                   <button onClick={() => setShowScheduleDialog(t.id)} className="text-sm text-blue-600 hover:text-blue-800">Add Schedule</button>
@@ -159,7 +215,7 @@ export default function TemplatesPage() {
               )}
             </div>
           ))}
-          {templates.length === 0 && (
+          {filteredTemplates.length === 0 && (
             <p className="text-center text-muted-foreground py-8">No templates yet.</p>
           )}
         </div>
@@ -188,6 +244,22 @@ export default function TemplatesPage() {
               <div>
                 <label htmlFor="tpl-instructions" className="block text-sm font-medium mb-1">Instructions *</label>
                 <textarea id="tpl-instructions" className="w-full px-3 py-2 border rounded-md text-sm bg-background" rows={6} value={form.instructions} onChange={(e) => setForm({ ...form, instructions: e.target.value })} required />
+              </div>
+              <div>
+                <label htmlFor="tpl-project" className="block text-sm font-medium mb-1">Project</label>
+                <select
+                  id="tpl-project"
+                  className="w-full px-3 py-2 border rounded-md text-sm bg-background"
+                  value={form.projectSlug}
+                  onChange={(e) => setForm({ ...form, projectSlug: e.target.value })}
+                >
+                  <option value="">None</option>
+                  {projects.map((project) => (
+                    <option key={project.slug} value={project.slug}>
+                      {project.name}
+                    </option>
+                  ))}
+                </select>
               </div>
               <div>
                 <label htmlFor="tpl-tags" className="block text-sm font-medium mb-1">Tags (comma-separated)</label>

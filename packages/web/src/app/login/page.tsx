@@ -2,8 +2,10 @@
 
 import { Suspense } from "react";
 import { useState } from "react";
-import { signIn } from "next-auth/react";
 import { useRouter, useSearchParams } from "next/navigation";
+
+// Note: Using manual form submission to avoid NextAuth signIn() callbackUrl issues
+// with multi-origin access (localhost vs Tailscale hostname)
 
 function LoginForm() {
   const router = useRouter();
@@ -20,19 +22,54 @@ function LoginForm() {
     setError("");
     setLoading(true);
 
-    const result = await signIn("credentials", {
-      email,
-      password,
-      redirect: false,
+    // Construct full callback URL with current origin
+    const fullCallbackUrl = new URL(callbackUrl, window.location.origin).href;
+
+    // Fetch CSRF token from NextAuth (required for Credentials callback)
+    const csrfRes = await fetch("/api/auth/csrf", {
+      cache: "no-store",
+      credentials: "include",
+    });
+    const csrf = await csrfRes.json().catch(() => null);
+    const csrfToken = csrf?.csrfToken;
+
+    // NextAuth expects URL-encoded form posts for CSRF-protected endpoints.
+    const body = new URLSearchParams();
+    body.set("email", email);
+    body.set("password", password);
+    if (csrfToken) body.set("csrfToken", csrfToken);
+    body.set("callbackUrl", fullCallbackUrl);
+    body.set("json", "true");
+
+    const response = await fetch("/api/auth/callback/credentials", {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body,
+      credentials: "include",
+      redirect: "manual", // We'll handle redirect manually to preserve URL
     });
 
     setLoading(false);
 
-    if (result?.error) {
+    // NextAuth often responds with a redirect (302/303) on success.
+    // With `redirect: "manual"`, that redirect won't be followed automatically.
+    if (response.ok || (response.status >= 300 && response.status < 400)) {
+      window.location.href = fullCallbackUrl;
+      return;
+    }
+
+    // Error responses are not guaranteed to be JSON (and `response.json()` can throw).
+    try {
+      const contentType = response.headers.get("content-type") ?? "";
+      if (contentType.includes("application/json")) {
+        const data = await response.json();
+        setError(data?.error || "Invalid email or password");
+      } else {
+        const text = (await response.text()).trim();
+        setError(text || "Invalid email or password");
+      }
+    } catch {
       setError("Invalid email or password");
-    } else {
-      router.push(callbackUrl);
-      router.refresh();
     }
   }
 

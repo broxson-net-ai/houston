@@ -66,7 +66,15 @@ function StatusBadge({ status }: { status: string }) {
   );
 }
 
-function TaskCard({ task, onAction }: { task: Task; onAction: () => void }) {
+function TaskCard({
+  task,
+  onAction,
+  pushToast,
+}: {
+  task: Task;
+  onAction: () => void;
+  pushToast: (type: "success" | "error", message: string) => void;
+}) {
   const missedCount = task.schedule?.missedCount ?? 0;
 
   return (
@@ -96,7 +104,16 @@ function TaskCard({ task, onAction }: { task: Task; onAction: () => void }) {
         <button
           onClick={async (e) => {
             e.stopPropagation();
-            await fetch(`/api/tasks/${task.id}/dispatch`, { method: "POST" });
+            const res = await fetch(`/api/tasks/${task.id}/dispatch`, {
+              method: "POST",
+              credentials: "include",
+            });
+            if (!res.ok) {
+              const data = await res.json().catch(() => ({}));
+              pushToast("error", data.error || "Dispatch failed");
+              return;
+            }
+            pushToast("success", "Dispatch queued");
             onAction();
           }}
           className="text-xs text-blue-600 hover:text-blue-800"
@@ -107,7 +124,16 @@ function TaskCard({ task, onAction }: { task: Task; onAction: () => void }) {
           <button
             onClick={async (e) => {
               e.stopPropagation();
-              await fetch(`/api/tasks/${task.id}/retry`, { method: "POST" });
+              const res = await fetch(`/api/tasks/${task.id}/retry`, {
+                method: "POST",
+                credentials: "include",
+              });
+              if (!res.ok) {
+                const data = await res.json().catch(() => ({}));
+                pushToast("error", data.error || "Retry failed");
+                return;
+              }
+              pushToast("success", "Retry queued");
               onAction();
             }}
             className="text-xs text-orange-600 hover:text-orange-800 ml-2"
@@ -118,11 +144,18 @@ function TaskCard({ task, onAction }: { task: Task; onAction: () => void }) {
         <button
           onClick={async (e) => {
             e.stopPropagation();
-            await fetch(`/api/tasks/${task.id}`, {
+            const res = await fetch(`/api/tasks/${task.id}`, {
               method: "PATCH",
               headers: { "Content-Type": "application/json" },
+              credentials: "include",
               body: JSON.stringify({ archivedAt: new Date().toISOString() }),
             });
+            if (!res.ok) {
+              const data = await res.json().catch(() => ({}));
+              pushToast("error", data.error || "Archive failed");
+              return;
+            }
+            pushToast("success", "Task archived");
             onAction();
           }}
           className="text-xs text-gray-500 hover:text-gray-800 ml-2"
@@ -154,7 +187,15 @@ function DroppableColumn({
   );
 }
 
-function DraggableTaskCard({ task, onAction }: { task: Task; onAction: () => void }) {
+function DraggableTaskCard({
+  task,
+  onAction,
+  pushToast,
+}: {
+  task: Task;
+  onAction: () => void;
+  pushToast: (type: "success" | "error", message: string) => void;
+}) {
   const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
     id: task.id,
   });
@@ -167,8 +208,15 @@ function DraggableTaskCard({ task, onAction }: { task: Task; onAction: () => voi
       {...attributes}
       className={isDragging ? "opacity-40" : ""}
     >
-      <div {...listeners} className="cursor-grab active:cursor-grabbing">
-        <TaskCard task={task} onAction={onAction} />
+      <div className="relative">
+        <div
+          {...listeners}
+          className="absolute right-2 top-2 h-4 w-4 cursor-grab rounded-sm border bg-muted text-[10px] leading-4 text-center text-muted-foreground"
+          title="Drag"
+        >
+          ⠿
+        </div>
+        <TaskCard task={task} onAction={onAction} pushToast={pushToast} />
       </div>
     </div>
   );
@@ -198,6 +246,15 @@ export default function BoardPage() {
   const [showArchived, setShowArchived] = useState(false);
   const [loading, setLoading] = useState(false);
   const [activeTask, setActiveTask] = useState<Task | null>(null);
+  const [toasts, setToasts] = useState<Array<{ id: string; type: "success" | "error"; message: string }>>([]);
+
+  function pushToast(type: "success" | "error", message: string) {
+    const id = `${Date.now()}-${Math.random()}`;
+    setToasts((current) => [...current, { id, type, message }]);
+    setTimeout(() => {
+      setToasts((current) => current.filter((toast) => toast.id !== id));
+    }, 2500);
+  }
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -388,14 +445,16 @@ export default function BoardPage() {
                       {col} ({items.length})
                     </h2>
                     {items.map((task) => (
-                      <DraggableTaskCard key={task.id} task={task} onAction={fetchData} />
+                      <DraggableTaskCard key={task.id} task={task} onAction={fetchData} pushToast={pushToast} />
                     ))}
                   </DroppableColumn>
                 );
               })}
             </div>
             <DragOverlay>
-              {activeTask ? <TaskCard task={activeTask} onAction={() => {}} /> : null}
+              {activeTask ? (
+                <TaskCard task={activeTask} onAction={() => {}} pushToast={pushToast} />
+              ) : null}
             </DragOverlay>
           </DndContext>
         )}
@@ -412,18 +471,37 @@ export default function BoardPage() {
                       {agent?.name ?? "Unassigned"} ({tasks.length})
                     </h2>
                     {tasks.map((task) => (
-                      <DraggableTaskCard key={task.id} task={task} onAction={fetchData} />
+                      <DraggableTaskCard key={task.id} task={task} onAction={fetchData} pushToast={pushToast} />
                     ))}
                   </DroppableColumn>
                 );
               })}
             </div>
             <DragOverlay>
-              {activeTask ? <TaskCard task={activeTask} onAction={() => {}} /> : null}
+              {activeTask ? (
+                <TaskCard task={activeTask} onAction={() => {}} pushToast={pushToast} />
+              ) : null}
             </DragOverlay>
           </DndContext>
         )}
       </div>
+
+      {toasts.length > 0 && (
+        <div className="fixed bottom-6 right-6 z-50 flex flex-col gap-2">
+          {toasts.map((toast) => (
+            <div
+              key={toast.id}
+              className={`rounded-md px-4 py-2 text-sm shadow-lg border ${
+                toast.type === "success"
+                  ? "bg-emerald-50 text-emerald-900 border-emerald-200"
+                  : "bg-red-50 text-red-900 border-red-200"
+              }`}
+            >
+              {toast.message}
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

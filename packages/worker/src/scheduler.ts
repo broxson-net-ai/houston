@@ -1,7 +1,10 @@
 import PgBoss from "pg-boss";
 import { db } from "@houston/shared";
-import { parseExpression as parseCronExpression } from "cron-parser";
+import cronParser from "cron-parser";
 import { DispatchService, DispatchJobData } from "./dispatcher.js";
+
+// cron-parser v4 (CJS) exposes parseExpression off the default export when imported from ESM
+const parseCronExpression = cronParser.parseExpression;
 
 const TICK_INTERVAL_MS =
   parseInt(process.env.HOUSTON_SCHEDULER_TICK_SECONDS ?? "30", 10) * 1000;

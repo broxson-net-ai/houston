@@ -132,17 +132,19 @@ export class DispatchService {
       return;
     }
 
+    // OpenClaw Gateway (current) expects the "agent" method params to look like
+    // { message, sessionKey, idempotencyKey, deliver, channel, lane, timeout, ... }
+    // not the older { routingKey, instructions } shape.
     const requestPayload = {
-      routingKey: agent.routingKey,
-      instructions: assembled,
-      metadata: {
-        templateId: schedule.templateId,
-        scheduleId,
-        dueAt,
-        tags: schedule.template.tags,
-        priority: schedule.template.priority,
-      },
-      deliveryHint: "primary channel",
+      message: assembled,
+      sessionKey: agent.routingKey, // e.g. "agent:main:main"
+      idempotencyKey,
+      deliver: false,
+      channel: "webchat",
+      lane: "cron",
+      timeout: 0,
+      // NOTE: OpenClaw's agent params schema is strict (additionalProperties: false)
+      // so we cannot send arbitrary metadata here.
     };
 
     try {
@@ -156,7 +158,8 @@ export class DispatchService {
         where: { id: taskRun.id },
         data: {
           wsRequestId: taskRun.id,
-          gatewayRunId: response?.run_id as string ?? null,
+          // OpenClaw returns runId (camelCase)
+          gatewayRunId: (response?.runId as string) ?? null,
           requestPayload: requestPayload as object,
           responsePayload: response as object,
           status: TaskRunStatus.ACCEPTED,
@@ -170,7 +173,7 @@ export class DispatchService {
           scheduleId,
           type: "DISPATCHED",
           message: `Dispatched to agent ${agent.routingKey}`,
-          metadata: { gatewayRunId: (response?.run_id as string) ?? null },
+          metadata: { gatewayRunId: (response?.runId as string) ?? null },
         },
       });
     } catch (err) {

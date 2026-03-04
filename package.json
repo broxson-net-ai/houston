@@ -8,13 +8,20 @@
   "scripts": {
     "build": "npm run build --workspaces --if-present",
     "test": "npm run test --workspaces --if-present",
-    "dev": "concurrently \"npm run dev -w packages/web\" \"npm run dev -w packages/worker\"",
+    "dev": "dotenv -e .env -- concurrently \"npm run dev -w packages/web\" \"npm run dev -w packages/worker\"",
+    "prod": "npm run build && concurrently \"npm run start -w packages/web\" \"npm run start -w packages/worker\"",
+    "start": "npm run prod",
     "db:migrate": "npm run db:migrate -w packages/shared",
     "db:seed": "npm run db:seed -w packages/shared",
-    "db:generate": "npm run db:generate -w packages/shared"
+    "db:generate": "npm run db:generate -w packages/shared",
+    "projects:auto-tag": "node scripts/auto-tag-templates.mjs"
   },
   "devDependencies": {
     "concurrently": "^8.2.2",
+    "dotenv-cli": "^11.0.0",
     "typescript": "^5.3.3"
+  },
+  "dependencies": {
+    "@tailwindcss/typography": "^0.5.19"
   }
 }
