@@ -418,7 +418,7 @@ export default function BoardPage() {
           >
             <option value="">All Projects</option>
             {projects.map((p) => (
-              <option key={p.id} value={p.id}>{p.name}</option>
+              <option key={p.slug} value={p.id}>{p.name}</option>
             ))}
           </select>
           <label className="flex items-center gap-2 text-sm">

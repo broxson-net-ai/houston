@@ -94,7 +94,7 @@ export default function NewTaskPage() {
             >
               <option value="">None</option>
               {projects.map((p) => (
-                <option key={p.id} value={p.id}>
+                <option key={p.slug} value={p.id}>
                   {p.name}
                 </option>
               ))}
