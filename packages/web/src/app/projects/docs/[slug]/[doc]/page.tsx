@@ -8,9 +8,10 @@ import { getProject, getProjectDocPath } from "@/lib/projects";
 export default async function ProjectDocPage({
   params,
 }: {
-  params: { slug: string; doc: string };
+  params: Promise<{ slug: string; doc: string }>;
 }) {
-  const { slug, doc } = params;
+  const { slug, doc } = await params;
+
   const project = getProject(slug);
   const docPath = getProjectDocPath(slug, doc);
 

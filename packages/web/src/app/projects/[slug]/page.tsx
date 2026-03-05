@@ -6,10 +6,11 @@ import ProjectDetailView from "./ProjectDetailView";
 export default async function ProjectDetailPage({
   params,
 }: {
-  params: { slug: string };
+  params: Promise<{ slug: string }>;
 }) {
+  const { slug } = await params;
   const projects = await listProjectsWithCounts();
-  const project = projects.find((item) => item.slug === params.slug);
+  const project = projects.find((item) => item.slug === slug);
 
   if (!project) {
     notFound();

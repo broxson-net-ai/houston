@@ -5,12 +5,13 @@ import { validateCron, computeNextRunAt } from "@/lib/cron";
 
 export async function GET(
   req: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   const authError = await requireAuth();
   if (authError) return authError;
 
-  const schedule = await db.schedule.findUnique({ where: { id: params.id } });
+  const { id } = await params;
+  const schedule = await db.schedule.findUnique({ where: { id } });
   if (!schedule) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
@@ -19,12 +20,13 @@ export async function GET(
 
 export async function PATCH(
   req: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   const authError = await requireAuth();
   if (authError) return authError;
 
-  const schedule = await db.schedule.findUnique({ where: { id: params.id } });
+  const { id } = await params;
+  const schedule = await db.schedule.findUnique({ where: { id } });
   if (!schedule) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
@@ -41,7 +43,7 @@ export async function PATCH(
   const nextRunAt = cron || timezone ? computeNextRunAt(newCron, newTz) : undefined;
 
   const updated = await db.schedule.update({
-    where: { id: params.id },
+    where: { id },
     data: {
       ...(cron !== undefined && { cron }),
       ...(timezone !== undefined && { timezone }),
@@ -55,16 +57,17 @@ export async function PATCH(
 
 export async function DELETE(
   req: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   const authError = await requireAuth();
   if (authError) return authError;
 
-  const schedule = await db.schedule.findUnique({ where: { id: params.id } });
+  const { id } = await params;
+  const schedule = await db.schedule.findUnique({ where: { id } });
   if (!schedule) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
 
-  await db.schedule.delete({ where: { id: params.id } });
+  await db.schedule.delete({ where: { id } });
   return NextResponse.json({ success: true });
 }

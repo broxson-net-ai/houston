@@ -4,12 +4,13 @@ import { requireAuth } from "@/lib/session";
 
 export async function POST(
   req: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   const authError = await requireAuth();
   if (authError) return authError;
 
-  const task = await db.task.findUnique({ where: { id: params.id } });
+  const { id } = await params;
+  const task = await db.task.findUnique({ where: { id } });
   if (!task) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
@@ -18,7 +19,7 @@ export async function POST(
   // For now, create a QUEUED event
   await db.taskEvent.create({
     data: {
-      taskId: params.id,
+      taskId: id,
       type: "QUEUED",
       message: "Manual dispatch requested",
     },

@@ -2,7 +2,16 @@
 
 import { useMemo, useState } from "react";
 import Link from "next/link";
+import MarkdownPreview from "@/components/MarkdownPreview";
 import type { ProjectSummary } from "@/lib/projects";
+
+const DOC_LABELS = {
+  project: "Project Doc",
+  actionPlan: "Action Plan",
+  notes: "Notes",
+} as const;
+
+type ProjectDocType = keyof typeof DOC_LABELS;
 
 function badgeColor(status?: string) {
   if (!status) return "bg-muted text-muted-foreground";
@@ -19,6 +28,11 @@ export default function ProjectsView({ projects }: { projects: ProjectSummary[] 
   const [statusFilter, setStatusFilter] = useState("");
   const [ownerFilter, setOwnerFilter] = useState("");
   const [tagFilter, setTagFilter] = useState("");
+  const [modalProject, setModalProject] = useState<ProjectSummary | null>(null);
+  const [selectedDoc, setSelectedDoc] = useState<ProjectDocType | null>(null);
+  const [docContent, setDocContent] = useState("");
+  const [loadingContent, setLoadingContent] = useState(false);
+  const [docError, setDocError] = useState("");
 
   const filters = useMemo(() => {
     const statuses = new Set<string>();
@@ -54,6 +68,36 @@ export default function ProjectsView({ projects }: { projects: ProjectSummary[] 
       return matchesQuery && matchesStatus && matchesOwner && matchesTag;
     });
   }, [projects, query, statusFilter, ownerFilter, tagFilter]);
+
+  async function viewDoc(project: ProjectSummary, doc: ProjectDocType) {
+    setModalProject(project);
+    setSelectedDoc(doc);
+    setLoadingContent(true);
+    setDocError("");
+    setDocContent("");
+
+    try {
+      const res = await fetch(
+        `/api/projects/${encodeURIComponent(project.slug)}/doc?doc=${encodeURIComponent(doc)}`
+      );
+      if (!res.ok) throw new Error("Failed to load project document");
+      const data = await res.json();
+      setDocContent(data.content ?? "");
+    } catch (err) {
+      console.error("Failed to load project document:", err);
+      setDocError("Failed to load project document");
+    } finally {
+      setLoadingContent(false);
+    }
+  }
+
+  function closeDocModal() {
+    setModalProject(null);
+    setSelectedDoc(null);
+    setDocContent("");
+    setDocError("");
+    setLoadingContent(false);
+  }
 
   return (
     <div className="space-y-6">
@@ -160,33 +204,77 @@ export default function ProjectsView({ projects }: { projects: ProjectSummary[] 
 
             <div className="mt-4 flex flex-wrap gap-3 text-sm">
               {project.links.project ? (
-                <Link
-                  href={project.links.project}
+                <button
+                  type="button"
+                  onClick={() => viewDoc(project, "project")}
                   className="text-primary hover:underline"
                 >
                   Project
-                </Link>
+                </button>
               ) : null}
               {project.links.actionPlan ? (
-                <Link
-                  href={project.links.actionPlan}
+                <button
+                  type="button"
+                  onClick={() => viewDoc(project, "actionPlan")}
                   className="text-primary hover:underline"
                 >
                   Action Plan
-                </Link>
+                </button>
               ) : null}
               {project.links.notes ? (
-                <Link
-                  href={project.links.notes}
+                <button
+                  type="button"
+                  onClick={() => viewDoc(project, "notes")}
                   className="text-primary hover:underline"
                 >
                   Notes
-                </Link>
+                </button>
               ) : null}
             </div>
           </div>
         ))}
       </div>
+
+      {modalProject && selectedDoc && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+          onClick={closeDocModal}
+        >
+          <div
+            className="max-h-[80vh] w-full max-w-4xl overflow-auto rounded-lg border bg-background p-6 shadow-lg"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="mb-4 flex items-center justify-between">
+              <div>
+                <h2 className="text-2xl font-bold font-mono">{DOC_LABELS[selectedDoc]}</h2>
+                <p className="text-sm text-muted-foreground font-mono">
+                  {modalProject.slug} / {DOC_LABELS[selectedDoc]}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={closeDocModal}
+                className="rounded-md border px-3 py-1 text-sm hover:bg-muted"
+              >
+                Close
+              </button>
+            </div>
+            {loadingContent && (
+              <div className="flex items-center justify-center py-12 text-muted-foreground">
+                Loading...
+              </div>
+            )}
+            {docError && (
+              <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-red-800 dark:border-red-900 dark:bg-red-950 dark:text-red-200">
+                {docError}
+              </div>
+            )}
+            {!loadingContent && !docError && docContent && (
+              <MarkdownPreview content={docContent} />
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

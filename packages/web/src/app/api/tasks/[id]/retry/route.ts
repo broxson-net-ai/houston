@@ -4,13 +4,14 @@ import { requireAuth } from "@/lib/session";
 
 export async function POST(
   req: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   const authError = await requireAuth();
   if (authError) return authError;
 
+  const { id } = await params;
   const task = await db.task.findUnique({
-    where: { id: params.id },
+    where: { id },
     include: { taskRuns: { orderBy: { attemptNumber: "desc" }, take: 1 } },
   });
 
@@ -28,7 +29,7 @@ export async function POST(
   // Enqueue retry via pg-boss
   await db.taskEvent.create({
     data: {
-      taskId: params.id,
+      taskId: id,
       type: "QUEUED",
       message: "Retry requested",
     },

@@ -21,8 +21,10 @@
     "db:push": "prisma db push"
   },
   "dependencies": {
+    "@auth/prisma-adapter": "2.11.1",
     "@prisma/client": "^5.9.1",
-    "bcryptjs": "^2.4.3"
+    "bcryptjs": "^2.4.3",
+    "next": "16.1.6"
   },
   "devDependencies": {
     "@types/bcryptjs": "^2.4.6",
@@ -31,7 +33,7 @@
     "prisma": "^5.9.1",
     "tsx": "^4.7.0",
     "typescript": "^5.3.3",
-    "vitest": "^1.2.2"
+    "vitest": "^4.0.18"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"

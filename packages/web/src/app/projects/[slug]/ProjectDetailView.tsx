@@ -1,15 +1,26 @@
 "use client";
 
 import { useState } from "react";
-import Link from "next/link";
+import MarkdownPreview from "@/components/MarkdownPreview";
 import type { ProjectSummary } from "@/lib/projects";
 
 const STATUS_OPTIONS = ["active", "paused", "done", "draft"];
+const DOC_LABELS = {
+  project: "Project Doc",
+  actionPlan: "Action Plan",
+  notes: "Notes",
+} as const;
+
+type ProjectDocType = keyof typeof DOC_LABELS;
 
 export default function ProjectDetailView({ project }: { project: ProjectSummary }) {
   const [status, setStatus] = useState(project.status ?? "");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [selectedDoc, setSelectedDoc] = useState<ProjectDocType | null>(null);
+  const [docContent, setDocContent] = useState("");
+  const [loadingContent, setLoadingContent] = useState(false);
+  const [docError, setDocError] = useState("");
 
   async function updateStatus(next: string) {
     setSaving(true);
@@ -30,6 +41,34 @@ export default function ProjectDetailView({ project }: { project: ProjectSummary
     } finally {
       setSaving(false);
     }
+  }
+
+  async function viewDoc(doc: ProjectDocType) {
+    setSelectedDoc(doc);
+    setLoadingContent(true);
+    setDocError("");
+    setDocContent("");
+
+    try {
+      const res = await fetch(
+        `/api/projects/${encodeURIComponent(project.slug)}/doc?doc=${encodeURIComponent(doc)}`
+      );
+      if (!res.ok) throw new Error("Failed to load project document");
+      const data = await res.json();
+      setDocContent(data.content ?? "");
+    } catch (err) {
+      console.error("Failed to load project document:", err);
+      setDocError("Failed to load project document");
+    } finally {
+      setLoadingContent(false);
+    }
+  }
+
+  function closeDocModal() {
+    setSelectedDoc(null);
+    setDocContent("");
+    setDocError("");
+    setLoadingContent(false);
   }
 
   return (
@@ -86,21 +125,74 @@ export default function ProjectDetailView({ project }: { project: ProjectSummary
 
       <div className="flex flex-wrap gap-4 text-sm">
         {project.links.project ? (
-          <Link href={project.links.project} className="text-primary hover:underline">
+          <button
+            type="button"
+            onClick={() => viewDoc("project")}
+            className="text-primary hover:underline"
+          >
             Project Doc
-          </Link>
+          </button>
         ) : null}
         {project.links.actionPlan ? (
-          <Link href={project.links.actionPlan} className="text-primary hover:underline">
+          <button
+            type="button"
+            onClick={() => viewDoc("actionPlan")}
+            className="text-primary hover:underline"
+          >
             Action Plan
-          </Link>
+          </button>
         ) : null}
         {project.links.notes ? (
-          <Link href={project.links.notes} className="text-primary hover:underline">
+          <button
+            type="button"
+            onClick={() => viewDoc("notes")}
+            className="text-primary hover:underline"
+          >
             Notes
-          </Link>
+          </button>
         ) : null}
       </div>
+
+      {selectedDoc && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+          onClick={closeDocModal}
+        >
+          <div
+            className="max-h-[80vh] w-full max-w-4xl overflow-auto rounded-lg border bg-background p-6 shadow-lg"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="mb-4 flex items-center justify-between">
+              <div>
+                <h2 className="text-2xl font-bold font-mono">{DOC_LABELS[selectedDoc]}</h2>
+                <p className="text-sm text-muted-foreground font-mono">
+                  {project.slug} / {DOC_LABELS[selectedDoc]}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={closeDocModal}
+                className="rounded-md border px-3 py-1 text-sm hover:bg-muted"
+              >
+                Close
+              </button>
+            </div>
+            {loadingContent && (
+              <div className="flex items-center justify-center py-12 text-muted-foreground">
+                Loading...
+              </div>
+            )}
+            {docError && (
+              <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-red-800 dark:border-red-900 dark:bg-red-950 dark:text-red-200">
+                {docError}
+              </div>
+            )}
+            {!loadingContent && !docError && docContent && (
+              <MarkdownPreview content={docContent} />
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

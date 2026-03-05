@@ -4,13 +4,14 @@ import { requireAuth } from "@/lib/session";
 
 export async function GET(
   req: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   const authError = await requireAuth();
   if (authError) return authError;
 
+  const { id } = await params;
   const task = await db.task.findUnique({
-    where: { id: params.id },
+    where: { id },
     include: {
       agent: true,
       template: true,
@@ -35,12 +36,13 @@ export async function GET(
 
 export async function PATCH(
   req: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   const authError = await requireAuth();
   if (authError) return authError;
 
-  const task = await db.task.findUnique({ where: { id: params.id } });
+  const { id } = await params;
+  const task = await db.task.findUnique({ where: { id } });
   if (!task) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
@@ -54,7 +56,7 @@ export async function PATCH(
   }
 
   const updated = await db.task.update({
-    where: { id: params.id },
+    where: { id },
     data: {
       ...(title !== undefined && { title }),
       ...(agentId !== undefined && { agentId }),
@@ -70,7 +72,7 @@ export async function PATCH(
   if (archivedAt !== undefined) {
     await db.taskEvent.create({
       data: {
-        taskId: params.id,
+        taskId: id,
         type: archivedAt ? "ARCHIVED" : "STATUS_CHANGED",
         message: archivedAt ? "Task archived" : "Task unarchived",
       },
@@ -78,7 +80,7 @@ export async function PATCH(
   } else if (status !== undefined && status !== task.status) {
     await db.taskEvent.create({
       data: {
-        taskId: params.id,
+        taskId: id,
         type: "STATUS_CHANGED",
         message: `Status changed from ${task.status} to ${status}`,
       },

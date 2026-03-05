@@ -5,12 +5,13 @@ import { validateCron, computeNextRunAt, resolvePreset } from "@/lib/cron";
 
 export async function POST(
   req: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   const authError = await requireAuth();
   if (authError) return authError;
 
-  const template = await db.template.findUnique({ where: { id: params.id } });
+  const { id } = await params;
+  const template = await db.template.findUnique({ where: { id } });
   if (!template) {
     return NextResponse.json({ error: "Template not found" }, { status: 404 });
   }
@@ -40,7 +41,7 @@ export async function POST(
 
   const schedule = await db.schedule.create({
     data: {
-      templateId: params.id,
+      templateId: id,
       cron,
       timezone: tz,
       nextRunAt,
@@ -53,13 +54,14 @@ export async function POST(
 
 export async function GET(
   req: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   const authError = await requireAuth();
   if (authError) return authError;
 
+  const { id } = await params;
   const schedules = await db.schedule.findMany({
-    where: { templateId: params.id },
+    where: { templateId: id },
     orderBy: { createdAt: "asc" },
   });
   return NextResponse.json(schedules);

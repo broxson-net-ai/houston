@@ -4,13 +4,14 @@ import { requireAuth } from "@/lib/session";
 
 export async function GET(
   req: NextRequest,
-  { params }: { params: { name: string } }
+  { params }: { params: Promise<{ name: string }> }
 ) {
   const authError = await requireAuth();
   if (authError) return authError;
 
+  const { name } = await params;
   const skill = await db.skillsCache.findUnique({
-    where: { name: params.name },
+    where: { name },
   });
   if (!skill) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });

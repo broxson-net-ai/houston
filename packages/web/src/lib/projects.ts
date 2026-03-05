@@ -1,8 +1,23 @@
 import "server-only";
 
 import fs from "fs";
+import os from "os";
 import path from "path";
+import matter from "gray-matter";
 import { db } from "@houston/shared";
+import type { Project as PrismaProject } from "@houston/shared";
+
+export const PROJECT_STATUS_VALUES = ["active", "paused", "done", "draft"] as const;
+
+export type ProjectStatus = (typeof PROJECT_STATUS_VALUES)[number];
+
+export type ProjectModel = Pick<
+  PrismaProject,
+  "id" | "slug" | "title" | "createdAt" | "updatedAt"
+> & {
+  status: ProjectStatus;
+  metadata: Record<string, unknown> | null;
+};
 
 export type ProjectLinks = {
   project?: string;
@@ -23,8 +38,37 @@ export type ProjectSummary = {
   scheduleCount?: number;
 };
 
-const DEFAULT_PROJECTS_DIR =
-  "/Users/openclaw/.openclaw/workspace/memory/projects";
+type RegistryProject = {
+  slug: string;
+  name: string;
+  status?: string;
+};
+
+type CreateProjectInput = {
+  slug: string;
+  name: string;
+  status?: ProjectStatus;
+  owner?: string;
+  summary?: string;
+  tags?: string[];
+};
+
+type ParsedProjectDoc = {
+  name?: string;
+  status?: string;
+  owner?: string;
+  lastUpdated?: string;
+  tags?: string[];
+  summary?: string;
+};
+
+const DEFAULT_PROJECTS_DIR = path.join(
+  os.homedir(),
+  ".openclaw",
+  "workspace",
+  "memory",
+  "projects"
+);
 
 const PROJECTS_DIR =
   process.env.OPENCLAW_PROJECTS_DIR ?? DEFAULT_PROJECTS_DIR;
@@ -39,12 +83,19 @@ const DOC_MAP: Record<string, string> = {
 
 function normalizeStatus(value?: string) {
   if (!value) return undefined;
-  return value.replace(/\s+/g, " ").trim();
+  const normalized = value.replace(/\s+/g, " ").trim().toLowerCase();
+  if (/\bactive\b/.test(normalized)) return "active";
+  if (/\bpaused\b/.test(normalized)) return "paused";
+  if (/\bdone\b|\bcomplete(?:d)?\b/.test(normalized)) return "done";
+  if (/\bdraft\b/.test(normalized)) return "draft";
+  return normalized;
 }
 
 function parseOverviewSummary(contents: string) {
   const lines = contents.split(/\r?\n/);
-  const overviewIndex = lines.findIndex((line) => line.trim() === "## Overview");
+  const overviewIndex = lines.findIndex((line) =>
+    /^##\s+overview$/i.test(line.trim())
+  );
   if (overviewIndex === -1) return undefined;
 
   for (let i = overviewIndex + 1; i < lines.length; i += 1) {
@@ -62,6 +113,13 @@ function parseMetaLine(contents: string, label: string) {
   return match?.[1]?.trim();
 }
 
+function normalizeDate(raw: unknown) {
+  if (!raw) return undefined;
+  if (typeof raw === "string") return raw.trim();
+  if (raw instanceof Date) return raw.toISOString().slice(0, 10);
+  return undefined;
+}
+
 function parseTags(contents: string) {
   const raw = parseMetaLine(contents, "Tags");
   if (!raw) return undefined;
@@ -73,11 +131,11 @@ function parseTags(contents: string) {
 
 function parseProjectRegistry() {
   if (!fs.existsSync(PROJECTS_REGISTRY)) {
-    return [] as Array<{ slug: string; name: string; status?: string }>;
+    return [] as RegistryProject[];
   }
 
   const registry = fs.readFileSync(PROJECTS_REGISTRY, "utf8");
-  const projects: Array<{ slug: string; name: string; status?: string }> = [];
+  const projects: RegistryProject[] = [];
 
   registry.split(/\r?\n/).forEach((line) => {
     const match = line.match(
@@ -91,6 +149,82 @@ function parseProjectRegistry() {
   });
 
   return projects;
+}
+
+function listProjectDirectories() {
+  if (!fs.existsSync(PROJECTS_DIR)) return [] as string[];
+
+  return fs
+    .readdirSync(PROJECTS_DIR, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => entry.name)
+    .filter((name) => !name.startsWith("_"));
+}
+
+function slugToName(slug: string) {
+  return slug
+    .split("-")
+    .map((part) => (part ? `${part[0].toUpperCase()}${part.slice(1)}` : part))
+    .join(" ");
+}
+
+function normalizeTagsValue(raw: unknown) {
+  if (!raw) return undefined;
+  if (Array.isArray(raw)) {
+    const tags = raw.map(String).map((tag) => tag.trim()).filter(Boolean);
+    return tags.length > 0 ? tags : undefined;
+  }
+  if (typeof raw === "string") {
+    const tags = raw
+      .split(/[,;]/)
+      .map((tag) => tag.trim())
+      .filter(Boolean);
+    return tags.length > 0 ? tags : undefined;
+  }
+  return undefined;
+}
+
+function parseProjectDoc(docPath: string): ParsedProjectDoc {
+  if (!fs.existsSync(docPath)) return {};
+
+  const raw = fs.readFileSync(docPath, "utf8");
+  const parsed = matter(raw);
+  const fm = parsed.data as Record<string, unknown>;
+
+  const fallbackStatus =
+    normalizeStatus(parseMetaLine(parsed.content, "Status")) ??
+    normalizeStatus(parseMetaLine(parsed.content, "Current Status"));
+
+  return {
+    name:
+      (typeof fm.title === "string" && fm.title.trim()) ||
+      (typeof fm.name === "string" && fm.name.trim()) ||
+      undefined,
+    status: normalizeStatus(typeof fm.status === "string" ? fm.status : undefined) ?? fallbackStatus,
+    owner:
+      (typeof fm.owner === "string" && fm.owner.trim()) ||
+      parseMetaLine(parsed.content, "Owner") ||
+      undefined,
+    lastUpdated:
+      normalizeDate(fm.lastUpdated) ??
+      normalizeDate(fm.last_updated) ??
+      parseMetaLine(parsed.content, "Last Updated") ??
+      parseMetaLine(parsed.content, "Last updated"),
+    tags: normalizeTagsValue(fm.tags) ?? parseTags(parsed.content),
+    summary:
+      (typeof fm.summary === "string" && fm.summary.trim()) ||
+      parseOverviewSummary(parsed.content) ||
+      undefined,
+  };
+}
+
+function normalizeProjectStatus(status?: string): ProjectStatus | undefined {
+  const normalized = normalizeStatus(status);
+  if (!normalized) return undefined;
+  if ((PROJECT_STATUS_VALUES as readonly string[]).includes(normalized)) {
+    return normalized as ProjectStatus;
+  }
+  return undefined;
 }
 
 const DOC_SLUGS: Record<string, keyof ProjectLinks> = {
@@ -120,25 +254,25 @@ function buildLinks(slug: string): ProjectLinks {
 
 export function listProjects(): ProjectSummary[] {
   const registry = parseProjectRegistry();
+  const registryMap = new Map(registry.map((project) => [project.slug, project]));
+  const orderedSlugs = [
+    ...registry.map((project) => project.slug),
+    ...listProjectDirectories().filter((slug) => !registryMap.has(slug)),
+  ];
 
-  return registry.map(({ slug, name, status }) => {
+  return orderedSlugs.map((slug) => {
+    const registryProject = registryMap.get(slug);
     const projectPath = path.join(PROJECTS_DIR, slug, DOC_MAP.PROJECT);
-    let projectContents = "";
-    if (fs.existsSync(projectPath)) {
-      projectContents = fs.readFileSync(projectPath, "utf8");
-    }
-
-    const projectStatus =
-      normalizeStatus(parseMetaLine(projectContents, "Status")) ?? status;
+    const parsed = parseProjectDoc(projectPath);
 
     return {
       slug,
-      name,
-      status: projectStatus,
-      owner: parseMetaLine(projectContents, "Owner"),
-      lastUpdated: parseMetaLine(projectContents, "Last Updated"),
-      tags: parseTags(projectContents),
-      summary: parseOverviewSummary(projectContents),
+      name: parsed.name ?? registryProject?.name ?? slugToName(slug),
+      status: normalizeProjectStatus(parsed.status ?? registryProject?.status),
+      owner: parsed.owner,
+      lastUpdated: parsed.lastUpdated,
+      tags: parsed.tags,
+      summary: parsed.summary,
       links: buildLinks(slug),
     };
   });
@@ -208,33 +342,209 @@ export function getProject(slug: string) {
 }
 
 export function getProjectDocPath(slug: string, doc: string) {
+  if (!doc) return null;
   const normalized = doc.toUpperCase().replace(/[-\s]/g, "_");
   const fileName = DOC_MAP[normalized];
   if (!fileName) return null;
   return path.join(PROJECTS_DIR, slug, fileName);
 }
 
-export function updateProjectStatus(slug: string, status: string) {
+function writeProjectDocWithFrontmatter(
+  docPath: string,
+  nextData: Record<string, unknown>
+) {
+  const raw = fs.existsSync(docPath) ? fs.readFileSync(docPath, "utf8") : "";
+  const parsed = matter(raw);
+  const merged = { ...(parsed.data as Record<string, unknown>), ...nextData };
+  const serialized = matter.stringify(parsed.content, merged, { lineWidth: 0 });
+  fs.writeFileSync(docPath, serialized, "utf8");
+}
+
+function formatStatusLabel(status: ProjectStatus) {
+  return `${status[0].toUpperCase()}${status.slice(1)}`;
+}
+
+function upsertRegistryEntry(slug: string, name: string, status: ProjectStatus) {
+  const statusLabel = formatStatusLabel(status);
+  const nextLine = `- **${name}** (\`${slug}\`) — **${statusLabel}**`;
+
+  if (!fs.existsSync(PROJECTS_REGISTRY)) {
+    fs.mkdirSync(PROJECTS_DIR, { recursive: true });
+    fs.writeFileSync(
+      PROJECTS_REGISTRY,
+      `# Projects Registry\n\n## Active projects\n\n${nextLine}\n`,
+      "utf8"
+    );
+    return;
+  }
+
+  const lines = fs.readFileSync(PROJECTS_REGISTRY, "utf8").split(/\r?\n/);
+  const existingIndex = lines.findIndex((line) => line.includes(`(\`${slug}\`)`));
+  if (existingIndex >= 0) {
+    lines[existingIndex] = nextLine;
+    fs.writeFileSync(PROJECTS_REGISTRY, `${lines.join("\n")}\n`, "utf8");
+    return;
+  }
+
+  const activeHeader = lines.findIndex((line) => /^##\s+Active projects/i.test(line.trim()));
+  if (activeHeader >= 0) {
+    let insertAt = activeHeader + 1;
+    while (insertAt < lines.length && !lines[insertAt].trim().startsWith("## ")) {
+      insertAt += 1;
+    }
+    lines.splice(insertAt, 0, "", nextLine);
+    fs.writeFileSync(PROJECTS_REGISTRY, `${lines.join("\n")}\n`, "utf8");
+    return;
+  }
+
+  lines.push("", "## Active projects", "", nextLine);
+  fs.writeFileSync(PROJECTS_REGISTRY, `${lines.join("\n")}\n`, "utf8");
+}
+
+function removeRegistryEntry(slug: string) {
+  if (!fs.existsSync(PROJECTS_REGISTRY)) return;
+  const lines = fs
+    .readFileSync(PROJECTS_REGISTRY, "utf8")
+    .split(/\r?\n/)
+    .filter((line) => !line.includes(`(\`${slug}\`)`));
+  fs.writeFileSync(PROJECTS_REGISTRY, `${lines.join("\n").trimEnd()}\n`, "utf8");
+}
+
+function projectTemplate(
+  name: string,
+  slug: string,
+  status: ProjectStatus,
+  owner?: string,
+  summary?: string,
+  tags?: string[]
+) {
+  const yaml = {
+    title: name,
+    slug,
+    status,
+    lastUpdated: new Date().toISOString().slice(0, 10),
+    owner: owner ?? null,
+    tags: tags ?? [],
+    summary: summary ?? "",
+  };
+
+  const content = `# ${name}
+
+## Overview
+
+${summary ?? "Describe this project in one paragraph."}
+
+## Goals
+
+- [ ] Define goals
+
+## Scope
+
+- In scope:
+- Out of scope:
+
+## Dependencies / Related Projects
+
+- None yet.
+
+## Open Questions
+
+- None yet.
+`;
+
+  return matter.stringify(content, yaml, { lineWidth: 0 });
+}
+
+function actionPlanTemplate(name: string) {
+  return `# ${name} Action Plan
+
+## Next Steps
+
+- [ ] Add first milestone
+`;
+}
+
+function notesTemplate(name: string) {
+  return `# ${name} Notes
+
+## Scratchpad
+
+- Add notes here.
+`;
+}
+
+function secretsTemplate(name: string) {
+  return `# ${name} Secrets
+
+Store project credentials and sensitive config here.
+`;
+}
+
+function assertValidSlug(slug: string) {
+  return /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug);
+}
+
+export function createProject(input: CreateProjectInput) {
+  if (!assertValidSlug(input.slug)) {
+    return { error: "Invalid slug", status: 400 as const };
+  }
+  if (!isValidProjectStatus(input.status ?? "draft")) {
+    return { error: "Invalid status", status: 400 as const };
+  }
+
+  const status = input.status ?? "draft";
+  const projectDir = path.join(PROJECTS_DIR, input.slug);
+  if (fs.existsSync(projectDir)) {
+    return { error: "Project already exists", status: 400 as const };
+  }
+
+  fs.mkdirSync(projectDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(projectDir, DOC_MAP.PROJECT),
+    projectTemplate(input.name, input.slug, status, input.owner, input.summary, input.tags),
+    "utf8"
+  );
+  fs.writeFileSync(path.join(projectDir, DOC_MAP.ACTION_PLAN), actionPlanTemplate(input.name), "utf8");
+  fs.writeFileSync(path.join(projectDir, DOC_MAP.NOTES), notesTemplate(input.name), "utf8");
+  fs.writeFileSync(path.join(projectDir, "SECRETS.md"), secretsTemplate(input.name), "utf8");
+
+  upsertRegistryEntry(input.slug, input.name, status);
+  const project = getProject(input.slug);
+  if (!project) {
+    return { error: "Project created but could not be reloaded", status: 500 as const };
+  }
+  return { project, status: 201 as const };
+}
+
+export function updateProjectStatus(slug: string, status: ProjectStatus) {
   const docPath = path.join(PROJECTS_DIR, slug, DOC_MAP.PROJECT);
   if (!fs.existsSync(docPath)) return false;
 
-  const contents = fs.readFileSync(docPath, "utf8");
-  const statusLine = `**Status:** ${status}`;
-  let updated = contents;
+  writeProjectDocWithFrontmatter(docPath, {
+    status,
+    lastUpdated: new Date().toISOString().slice(0, 10),
+  });
 
-  if (/^\*\*Status:\*\*.*$/im.test(contents)) {
-    updated = contents.replace(/^\*\*Status:\*\*.*$/im, statusLine);
-  } else {
-    updated = `${statusLine}\n${contents}`;
+  const project = getProject(slug);
+  if (project?.name) {
+    upsertRegistryEntry(slug, project.name, status);
   }
 
-  const lastUpdatedLine = `**Last Updated:** ${new Date().toISOString().slice(0, 10)}`;
-  if (/^\*\*Last Updated:\*\*.*$/im.test(updated)) {
-    updated = updated.replace(/^\*\*Last Updated:\*\*.*$/im, lastUpdatedLine);
-  } else {
-    updated = updated.replace(statusLine, `${statusLine}\n${lastUpdatedLine}`);
-  }
-
-  fs.writeFileSync(docPath, updated, "utf8");
   return true;
+}
+
+export function deleteProject(slug: string) {
+  const projectDir = path.join(PROJECTS_DIR, slug);
+  if (!fs.existsSync(projectDir)) return false;
+  fs.rmSync(projectDir, { recursive: true });
+  removeRegistryEntry(slug);
+  return true;
+}
+
+export function isValidProjectStatus(value: string): value is ProjectStatus {
+  return (PROJECT_STATUS_VALUES as readonly string[]).includes(value);
+}
+
+export function isValidProjectSlug(value: string) {
+  return assertValidSlug(value);
 }

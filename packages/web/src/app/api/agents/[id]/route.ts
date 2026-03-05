@@ -4,12 +4,13 @@ import { requireAuth } from "@/lib/session";
 
 export async function GET(
   req: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   const authError = await requireAuth();
   if (authError) return authError;
 
-  const agent = await db.agent.findUnique({ where: { id: params.id } });
+  const { id } = await params;
+  const agent = await db.agent.findUnique({ where: { id } });
   if (!agent) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
@@ -18,12 +19,13 @@ export async function GET(
 
 export async function PATCH(
   req: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   const authError = await requireAuth();
   if (authError) return authError;
 
-  const agent = await db.agent.findUnique({ where: { id: params.id } });
+  const { id } = await params;
+  const agent = await db.agent.findUnique({ where: { id } });
   if (!agent) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
@@ -32,7 +34,7 @@ export async function PATCH(
   const { name, routingKey, avatarUrl, tags, enabled } = body;
 
   const updated = await db.agent.update({
-    where: { id: params.id },
+    where: { id },
     data: {
       ...(name !== undefined && { name }),
       ...(routingKey !== undefined && { routingKey }),
@@ -47,16 +49,17 @@ export async function PATCH(
 
 export async function DELETE(
   req: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   const authError = await requireAuth();
   if (authError) return authError;
 
-  const agent = await db.agent.findUnique({ where: { id: params.id } });
+  const { id } = await params;
+  const agent = await db.agent.findUnique({ where: { id } });
   if (!agent) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
 
-  await db.agent.delete({ where: { id: params.id } });
+  await db.agent.delete({ where: { id } });
   return NextResponse.json({ success: true });
 }

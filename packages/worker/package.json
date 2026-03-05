@@ -11,12 +11,14 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@auth/prisma-adapter": "2.11.1",
     "@houston/shared": "*",
     "cron-parser": "^4.9.0",
     "dotenv": "^17.3.1",
+    "next": "16.1.6",
     "pg-boss": "^9.0.3",
-    "ws": "^8.16.0",
-    "uuid": "^9.0.1"
+    "uuid": "^9.0.1",
+    "ws": "^8.16.0"
   },
   "devDependencies": {
     "@types/node": "^20.11.5",
@@ -24,6 +26,6 @@
     "@types/ws": "^8.5.10",
     "tsx": "^4.7.0",
     "typescript": "^5.3.3",
-    "vitest": "^1.2.2"
+    "vitest": "^4.0.18"
   }
 }

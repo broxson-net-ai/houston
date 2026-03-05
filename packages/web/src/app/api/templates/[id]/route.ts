@@ -4,13 +4,14 @@ import { requireAuth } from "@/lib/session";
 
 export async function GET(
   req: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   const authError = await requireAuth();
   if (authError) return authError;
 
+  const { id } = await params;
   const template = await db.template.findUnique({
-    where: { id: params.id },
+    where: { id },
     include: { defaultAgent: true, schedules: true },
   });
   if (!template) {
@@ -21,12 +22,13 @@ export async function GET(
 
 export async function PATCH(
   req: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   const authError = await requireAuth();
   if (authError) return authError;
 
-  const template = await db.template.findUnique({ where: { id: params.id } });
+  const { id } = await params;
+  const template = await db.template.findUnique({ where: { id } });
   if (!template) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
@@ -35,7 +37,7 @@ export async function PATCH(
   const { name, defaultAgentId, skillRef, instructions, tags, priority, enabled } = body;
 
   const updated = await db.template.update({
-    where: { id: params.id },
+    where: { id },
     data: {
       ...(name !== undefined && { name }),
       ...(defaultAgentId !== undefined && { defaultAgentId }),
@@ -53,16 +55,17 @@ export async function PATCH(
 
 export async function DELETE(
   req: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   const authError = await requireAuth();
   if (authError) return authError;
 
-  const template = await db.template.findUnique({ where: { id: params.id } });
+  const { id } = await params;
+  const template = await db.template.findUnique({ where: { id } });
   if (!template) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
 
-  await db.template.delete({ where: { id: params.id } });
+  await db.template.delete({ where: { id } });
   return NextResponse.json({ success: true });
 }
