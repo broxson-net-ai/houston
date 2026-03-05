@@ -28,6 +28,8 @@ type Task = {
   dueAt?: string | null;
   assembledInstructionsSnapshot?: string | null;
   preInstructionsVersion?: string | null;
+  projectId?: string | null;
+  project?: { id: string; slug: string; name: string } | null;
   agent?: { id: string; name: string } | null;
   template?: { id: string; name: string } | null;
   schedule?: { id: string; cron: string; missedCount: number } | null;
@@ -84,6 +86,7 @@ export default function TaskDetailPage() {
             <StatusBadge status={task.status} />
           </div>
           <div className="flex items-center gap-4 text-sm text-muted-foreground">
+            {task.project && <span>Project: {task.project.name}</span>}
             {task.agent && <span>Agent: {task.agent.name}</span>}
             {task.template && <span>Template: {task.template.name}</span>}
             {task.dueAt && <span>Due: {new Date(task.dueAt).toLocaleString()}</span>}

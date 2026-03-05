@@ -13,12 +13,15 @@ import { CSS } from "@dnd-kit/utilities";
 import { Nav } from "@/components/nav";
 
 type Agent = { id: string; name: string; routingKey: string; avatarUrl?: string | null };
+type Project = { id: string; slug: string; name: string };
 type Task = {
   id: string;
   title: string;
   status: string;
   dueAt?: string | null;
   agentId?: string | null;
+  projectId?: string | null;
+  project?: Project | null;
   agent?: Agent | null;
   schedule?: { missedCount: number; lastMissedAt?: string | null } | null;
 };
@@ -89,9 +92,16 @@ function TaskCard({
           </span>
         )}
       </div>
-      {task.agent && (
-        <p className="text-xs text-muted-foreground">{task.agent.name}</p>
-      )}
+      <div className="flex items-center gap-2">
+        {task.project && (
+          <span className="text-xs bg-purple-100 text-purple-800 px-1.5 py-0.5 rounded font-medium">
+            {task.project.name}
+          </span>
+        )}
+        {task.agent && (
+          <p className="text-xs text-muted-foreground">{task.agent.name}</p>
+        )}
+      </div>
       <div className="flex items-center justify-between">
         <StatusBadge status={task.status} />
         {task.dueAt && (
@@ -241,8 +251,10 @@ export default function BoardPage() {
   const [statusData, setStatusData] = useState<StatusGrouped | null>(null);
   const [agentData, setAgentData] = useState<AgentGrouped | null>(null);
   const [agents, setAgents] = useState<Agent[]>([]);
+  const [projects, setProjects] = useState<Project[]>([]);
   const [q, setQ] = useState("");
   const [filterAgent, setFilterAgent] = useState("");
+  const [filterProject, setFilterProject] = useState("");
   const [showArchived, setShowArchived] = useState(false);
   const [loading, setLoading] = useState(false);
   const [activeTask, setActiveTask] = useState<Task | null>(null);
@@ -262,22 +274,26 @@ export default function BoardPage() {
       const params = new URLSearchParams({ view });
       if (q) params.set("q", q);
       if (filterAgent) params.set("agentId", filterAgent);
+      if (filterProject) params.set("projectId", filterProject);
       if (showArchived) params.set("archived", "true");
 
-      const [tasksRes, agentsRes] = await Promise.all([
+      const [tasksRes, agentsRes, projectsRes] = await Promise.all([
         fetch(`/api/tasks?${params}`),
         fetch("/api/agents"),
+        fetch("/api/projects"),
       ]);
       const tasksData = await tasksRes.json();
       const agentsData = await agentsRes.json();
+      const projectsData = await projectsRes.json();
 
       setAgents(agentsData);
+      setProjects(projectsData.projects ?? []);
       if (view === "status") setStatusData({ ...tasksData.grouped, scheduled: tasksData.scheduled ?? [] });
       else setAgentData(tasksData.grouped);
     } finally {
       setLoading(false);
     }
-  }, [view, q, filterAgent, showArchived]);
+  }, [view, q, filterAgent, filterProject, showArchived]);
 
   useEffect(() => {
     const timer = setTimeout(fetchData, 300);
@@ -393,6 +409,16 @@ export default function BoardPage() {
             <option value="">All Agents</option>
             {agents.map((a) => (
               <option key={a.id} value={a.id}>{a.name}</option>
+            ))}
+          </select>
+          <select
+            value={filterProject}
+            onChange={(e) => setFilterProject(e.target.value)}
+            className="px-3 py-1.5 text-sm border rounded-md bg-background"
+          >
+            <option value="">All Projects</option>
+            {projects.map((p) => (
+              <option key={p.id} value={p.id}>{p.name}</option>
             ))}
           </select>
           <label className="flex items-center gap-2 text-sm">

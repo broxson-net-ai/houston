@@ -9,6 +9,7 @@ export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
   const view = searchParams.get("view") ?? "status";
   const agentId = searchParams.get("agentId");
+  const projectId = searchParams.get("projectId");
   const status = searchParams.get("status") as TaskStatus | null;
   const q = searchParams.get("q");
   const archived = searchParams.get("archived") === "true";
@@ -16,6 +17,7 @@ export async function GET(req: NextRequest) {
   const where: Record<string, unknown> = {
     archivedAt: archived ? { not: null } : null,
     ...(agentId && { agentId }),
+    ...(projectId && { projectId }),
     ...(status && { status }),
     ...(q && {
       OR: [
@@ -30,6 +32,7 @@ export async function GET(req: NextRequest) {
     where,
     include: {
       agent: true,
+      project: true,
       template: {
         include: {
           schedules: {
@@ -91,7 +94,7 @@ export async function POST(req: NextRequest) {
   if (authError) return authError;
 
   const body = await req.json();
-  const { title, agentId, templateId, dueAt, instructionsOverride } = body;
+  const { title, agentId, templateId, dueAt, instructionsOverride, projectId } = body;
 
   if (!title || typeof title !== "string") {
     return NextResponse.json({ error: "title is required" }, { status: 400 });
@@ -104,9 +107,10 @@ export async function POST(req: NextRequest) {
       templateId: templateId ?? null,
       dueAt: dueAt ? new Date(dueAt) : null,
       instructionsOverride: instructionsOverride ?? null,
+      projectId: projectId ?? null,
       status: TaskStatus.QUEUE,
     },
-    include: { agent: true, template: true },
+    include: { agent: true, template: true, project: true },
   });
 
   // Create CREATED event
@@ -114,7 +118,7 @@ export async function POST(req: NextRequest) {
     data: {
       taskId: task.id,
       type: "CREATED",
-      message: "Ad hoc task created",
+      message: projectId ? "Task created with project" : "Ad hoc task created",
     },
   });
 

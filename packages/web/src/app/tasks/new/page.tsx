@@ -5,13 +5,16 @@ import { useRouter } from "next/navigation";
 import { Nav } from "@/components/nav";
 
 type Agent = { id: string; name: string };
+type Project = { id: string; slug: string; name: string };
 
 export default function NewTaskPage() {
   const router = useRouter();
   const [agents, setAgents] = useState<Agent[]>([]);
+  const [projects, setProjects] = useState<Project[]>([]);
   const [form, setForm] = useState({
     title: "",
     agentId: "",
+    projectId: "",
     dueAt: "",
     instructionsOverride: "",
   });
@@ -19,7 +22,13 @@ export default function NewTaskPage() {
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    fetch("/api/agents").then((r) => r.json()).then(setAgents);
+    Promise.all([
+      fetch("/api/agents").then((r) => r.json()),
+      fetch("/api/projects").then((r) => r.json()),
+    ]).then(([agentsData, projectsData]) => {
+      if (agentsData.agents) setAgents(agentsData.agents);
+      if (projectsData.projects) setProjects(projectsData.projects);
+    });
   }, []);
 
   async function handleSubmit(e: React.FormEvent) {
@@ -33,6 +42,7 @@ export default function NewTaskPage() {
       body: JSON.stringify({
         title: form.title,
         agentId: form.agentId || null,
+        projectId: form.projectId || null,
         dueAt: form.dueAt || null,
         instructionsOverride: form.instructionsOverride || null,
       }),
@@ -71,6 +81,24 @@ export default function NewTaskPage() {
               onChange={(e) => setForm({ ...form, title: e.target.value })}
               required
             />
+          </div>
+          <div>
+            <label htmlFor="projectId" className="block text-sm font-medium mb-1">
+              Project
+            </label>
+            <select
+              id="projectId"
+              className="w-full px-3 py-2 border rounded-md text-sm bg-background"
+              value={form.projectId}
+              onChange={(e) => setForm({ ...form, projectId: e.target.value })}
+            >
+              <option value="">None</option>
+              {projects.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name}
+                </option>
+              ))}
+            </select>
           </div>
           <div>
             <label htmlFor="agentId" className="block text-sm font-medium mb-1">
