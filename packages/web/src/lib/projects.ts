@@ -1,5 +1,6 @@
 import "server-only";
 
+import crypto from "crypto";
 import fs from "fs";
 import os from "os";
 import path from "path";
@@ -352,12 +353,21 @@ export function getProjectDocPath(slug: string, doc: string) {
 function writeProjectDocWithFrontmatter(
   docPath: string,
   nextData: Record<string, unknown>
-) {
+): boolean {
+  // Check if file exists and get current hash
+  const currentHash = fs.existsSync(docPath)
+    ? crypto.createHash("sha256").update(fs.readFileSync(docPath, "utf8")).digest("hex")
+    : "";
+
   const raw = fs.existsSync(docPath) ? fs.readFileSync(docPath, "utf8") : "";
   const parsed = matter(raw);
   const merged = { ...(parsed.data as Record<string, unknown>), ...nextData };
   const serialized = matter.stringify(parsed.content, merged, { lineWidth: 0 });
   fs.writeFileSync(docPath, serialized, "utf8");
+
+  // Check if content was modified (conflict detection)
+  const newHash = crypto.createHash("sha256").update(serialized).digest("hex");
+  return currentHash !== newHash;
 }
 
 function formatStatusLabel(status: ProjectStatus) {
@@ -378,36 +388,67 @@ function upsertRegistryEntry(slug: string, name: string, status: ProjectStatus) 
     return;
   }
 
+  // Check for conflicts before writing
+  const currentHash = crypto
+    .createHash("sha256")
+    .update(fs.readFileSync(PROJECTS_REGISTRY, "utf8"))
+    .digest("hex");
+
   const lines = fs.readFileSync(PROJECTS_REGISTRY, "utf8").split(/\r?\n/);
   const existingIndex = lines.findIndex((line) => line.includes(`(\`${slug}\`)`));
   if (existingIndex >= 0) {
     lines[existingIndex] = nextLine;
     fs.writeFileSync(PROJECTS_REGISTRY, `${lines.join("\n")}\n`, "utf8");
-    return;
-  }
-
-  const activeHeader = lines.findIndex((line) => /^##\s+Active projects/i.test(line.trim()));
-  if (activeHeader >= 0) {
-    let insertAt = activeHeader + 1;
-    while (insertAt < lines.length && !lines[insertAt].trim().startsWith("## ")) {
-      insertAt += 1;
+  } else {
+    const activeHeader = lines.findIndex((line) => /^##\s+Active projects/i.test(line.trim()));
+    if (activeHeader >= 0) {
+      let insertAt = activeHeader + 1;
+      while (insertAt < lines.length && !lines[insertAt].trim().startsWith("## ")) {
+        insertAt += 1;
+      }
+      lines.splice(insertAt, 0, "", nextLine);
+      fs.writeFileSync(PROJECTS_REGISTRY, `${lines.join("\n")}\n`, "utf8");
+    } else {
+      lines.push("", "## Active projects", "", nextLine);
+      fs.writeFileSync(PROJECTS_REGISTRY, `${lines.join("\n")}\n`, "utf8");
     }
-    lines.splice(insertAt, 0, "", nextLine);
-    fs.writeFileSync(PROJECTS_REGISTRY, `${lines.join("\n")}\n`, "utf8");
-    return;
   }
 
-  lines.push("", "## Active projects", "", nextLine);
-  fs.writeFileSync(PROJECTS_REGISTRY, `${lines.join("\n")}\n`, "utf8");
+  // Check if content was modified (conflict detection)
+  const newHash = crypto
+    .createHash("sha256")
+    .update(fs.readFileSync(PROJECTS_REGISTRY, "utf8"))
+    .digest("hex");
+
+  if (currentHash !== newHash) {
+    console.warn(`⚠️  Conflict detected in PROJECTS.md: manual edits detected during project update`);
+  }
 }
 
 function removeRegistryEntry(slug: string) {
   if (!fs.existsSync(PROJECTS_REGISTRY)) return;
+
+  // Check for conflicts before writing
+  const currentHash = crypto
+    .createHash("sha256")
+    .update(fs.readFileSync(PROJECTS_REGISTRY, "utf8"))
+    .digest("hex");
+
   const lines = fs
     .readFileSync(PROJECTS_REGISTRY, "utf8")
     .split(/\r?\n/)
     .filter((line) => !line.includes(`(\`${slug}\`)`));
   fs.writeFileSync(PROJECTS_REGISTRY, `${lines.join("\n").trimEnd()}\n`, "utf8");
+
+  // Check if content was modified (conflict detection)
+  const newHash = crypto
+    .createHash("sha256")
+    .update(fs.readFileSync(PROJECTS_REGISTRY, "utf8"))
+    .digest("hex");
+
+  if (currentHash !== newHash) {
+    console.warn(`⚠️  Conflict detected in PROJECTS.md: manual edits detected during project deletion`);
+  }
 }
 
 function projectTemplate(
@@ -516,14 +557,36 @@ export function createProject(input: CreateProjectInput) {
   return { project, status: 201 as const };
 }
 
-export function updateProjectStatus(slug: string, status: ProjectStatus) {
+// Helper function to check for conflicts (only for updates, not creates)
+function checkForConflict(docPath: string): boolean {
+  const currentHash = fs.existsSync(docPath)
+    ? crypto.createHash("sha256").update(fs.readFileSync(docPath, "utf8")).digest("hex")
+    : "";
+
+  const raw = fs.existsSync(docPath) ? fs.readFileSync(docPath, "utf8") : "";
+  const parsed = matter(raw);
+  const serialized = matter.stringify(parsed.content, parsed.content, { lineWidth: 0 });
+
+  const newHash = crypto.createHash("sha256").update(serialized).digest("hex");
+  return currentHash !== newHash;
+}
+
+export function updateProjectStatus(slug: string, status: ProjectStatus): boolean {
   const docPath = path.join(PROJECTS_DIR, slug, DOC_MAP.PROJECT);
   if (!fs.existsSync(docPath)) return false;
+
+  // Check for conflicts before writing
+  const hasConflict = checkForConflict(docPath);
 
   writeProjectDocWithFrontmatter(docPath, {
     status,
     lastUpdated: new Date().toISOString().slice(0, 10),
   });
+
+  // Warn if there was a conflict (manual edit detected)
+  if (hasConflict) {
+    console.warn(`⚠️  Conflict detected for project "${slug}": manual edits detected in PROJECT.md`);
+  }
 
   const project = getProject(slug);
   if (project?.name) {
