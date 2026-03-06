@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import MarkdownPreview from "@/components/MarkdownPreview";
 import type { ProjectSummary } from "@/lib/projects";
@@ -23,16 +23,41 @@ function badgeColor(status?: string) {
   return "bg-muted text-muted-foreground";
 }
 
-export default function ProjectsView({ projects }: { projects: ProjectSummary[] }) {
+export default function ProjectsView({ projects: initialProjects }: { projects: ProjectSummary[] }) {
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
   const [ownerFilter, setOwnerFilter] = useState("");
   const [tagFilter, setTagFilter] = useState("");
+  const [projects, setProjects] = useState<ProjectSummary[]>(initialProjects);
   const [modalProject, setModalProject] = useState<ProjectSummary | null>(null);
   const [selectedDoc, setSelectedDoc] = useState<ProjectDocType | null>(null);
   const [docContent, setDocContent] = useState("");
   const [loadingContent, setLoadingContent] = useState(false);
   const [docError, setDocError] = useState("");
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+
+  // Auto-refresh projects every 30 seconds
+  useEffect(() => {
+    const refreshProjects = async () => {
+      try {
+        const res = await fetch("/api/projects");
+        if (!res.ok) return;
+        const data = await res.json();
+        setProjects(data.projects);
+        setLastUpdated(new Date());
+      } catch {
+        // Silently fail - polling will retry
+      }
+    };
+
+    // Initial refresh check after mount
+    refreshProjects();
+
+    // Poll every 30 seconds
+    const interval = setInterval(refreshProjects, 30000);
+
+    return () => clearInterval(interval);
+  }, []);
 
   const filters = useMemo(() => {
     const statuses = new Set<string>();
@@ -145,6 +170,12 @@ export default function ProjectsView({ projects }: { projects: ProjectSummary[] 
           ))}
         </select>
       </div>
+
+      {lastUpdated && (
+        <p className="text-xs text-muted-foreground">
+          Auto-refreshed: {lastUpdated.toLocaleTimeString()}
+        </p>
+      )}
 
       <div className="grid gap-6 md:grid-cols-2 xl:grid-cols-3">
         {filtered.map((project) => (

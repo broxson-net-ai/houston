@@ -18,7 +18,7 @@ export default function NewProjectPage() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
-  async function slugify(value: string) {
+  function slugify(value: string) {
     return value
       .toLowerCase()
       .trim()
@@ -26,8 +26,8 @@ export default function NewProjectPage() {
       .replace(/^-+|-+$/g, "");
   }
 
-  async function handleNameChange(value: string) {
-    setForm({ ...form, name: value, slug: slugify(value), title: value });
+  function handleNameChange(value: string) {
+    setForm((prev) => ({ ...prev, name: value, slug: slugify(value), title: value }));
   }
 
   async function handleSubmit(e: React.FormEvent) {

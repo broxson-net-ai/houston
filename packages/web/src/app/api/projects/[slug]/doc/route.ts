@@ -21,9 +21,8 @@ export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ slug: string }> }
 ) {
-  let slug: string;
   try {
-    slug = (await params).slug;
+    const { slug } = await params;
     const project = getProject(slug);
     if (!project) {
       return NextResponse.json({ error: "Not found" }, { status: 404 });
@@ -45,7 +44,7 @@ export async function GET(
     const content = fs.readFileSync(docPath, "utf8");
     return NextResponse.json({ content });
   } catch (error) {
-    console.error(`[projects] Failed to read project doc for ${slug}:`, error);
+    console.error("[projects] Failed to read project doc:", error);
     return NextResponse.json(
       { error: "Failed to load project doc" },
       { status: 500 }

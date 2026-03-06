@@ -57,7 +57,9 @@ export async function POST(req: NextRequest) {
       status,
       owner: typeof body.owner === "string" ? body.owner.trim() : undefined,
       summary: typeof body.summary === "string" ? body.summary.trim() : undefined,
-      tags: Array.isArray(body.tags) ? body.tags.map(String).map((tag) => tag.trim()).filter(Boolean) : undefined,
+      tags: Array.isArray(body.tags)
+        ? body.tags.map(String).map((tag: unknown) => (typeof tag === "string" ? tag.trim() : "")).filter(Boolean)
+        : undefined,
     });
 
     if ("error" in result) {

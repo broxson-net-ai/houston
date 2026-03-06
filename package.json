@@ -17,6 +17,7 @@
     "projects:auto-tag": "node scripts/auto-tag-templates.mjs"
   },
   "devDependencies": {
+    "@types/sanitize-html": "^2.16.0",
     "concurrently": "^8.2.2",
     "dotenv-cli": "^11.0.0",
     "typescript": "^5.3.3"
