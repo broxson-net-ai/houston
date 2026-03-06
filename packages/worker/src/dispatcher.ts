@@ -19,7 +19,11 @@ export class DispatchService {
       db.template.findUnique({ where: { id: templateId } }),
     ]);
 
-    if (!template) throw new Error(`Template not found: ${templateId}`);
+    if (!template) {
+      const errorText = `Template not found: ${templateId}`;
+      console.error(`[dispatcher] ${errorText}`);
+      throw new Error(errorText);
+    }
 
     const parts: string[] = [];
 
@@ -51,14 +55,30 @@ export class DispatchService {
       include: { template: true },
     });
 
-    if (!schedule) throw new Error(`Schedule not found: ${scheduleId}`);
-    if (!schedule.template) throw new Error(`Template not found for schedule: ${scheduleId}`);
+    if (!schedule) {
+      const errorText = `Schedule not found: ${scheduleId}`;
+      console.error(`[dispatcher] ${errorText}`);
+      throw new Error(errorText);
+    }
+    if (!schedule.template) {
+      const errorText = `Template not found for schedule: ${scheduleId}`;
+      console.error(`[dispatcher] ${errorText}`);
+      throw new Error(errorText);
+    }
 
     const agentId = schedule.template.defaultAgentId;
-    if (!agentId) throw new Error("Template has no default agent");
+    if (!agentId) {
+      const errorText = "Template has no default agent";
+      console.error(`[dispatcher] ${errorText} (scheduleId: ${scheduleId})`);
+      throw new Error(errorText);
+    }
 
     const agent = await db.agent.findUnique({ where: { id: agentId } });
-    if (!agent) throw new Error(`Agent not found: ${agentId}`);
+    if (!agent) {
+      const errorText = `Agent not found: ${agentId}`;
+      console.error(`[dispatcher] ${errorText}`);
+      throw new Error(errorText);
+    }
 
     const { assembled, preVersion } = await this.assembleInstructions(
       schedule.templateId,
@@ -109,13 +129,16 @@ export class DispatchService {
         scheduleId,
         type: "CREATED",
         message: `Task created for schedule ${scheduleId}`,
+        metadata: { templateId: schedule.templateId },
       },
     });
 
     if (!this.gatewayClient?.isConnected()) {
+      const errorText = "Gateway not connected";
+      console.error(`[dispatcher] ${errorText} (scheduleId: ${scheduleId}, taskId: ${task.id}, templateId: ${schedule.templateId})`);
       await db.taskRun.update({
         where: { id: taskRun.id },
-        data: { status: TaskRunStatus.FAILED, errorText: "Gateway not connected" },
+        data: { status: TaskRunStatus.FAILED, errorText },
       });
       await db.task.update({
         where: { id: task.id },
@@ -126,15 +149,16 @@ export class DispatchService {
           taskId: task.id,
           taskRunId: taskRun.id,
           type: "FAILED",
-          message: "Gateway not connected",
+          message: errorText,
+          metadata: { scheduleId, templateId: schedule.templateId },
         },
       });
       return;
     }
 
-    // OpenClaw Gateway (current) expects the "agent" method params to look like
+    // OpenClaw Gateway (current) expects to "agent" method params to look like
     // { message, sessionKey, idempotencyKey, deliver, channel, lane, timeout, ... }
-    // not the older { routingKey, instructions } shape.
+    // not older { routingKey, instructions } shape.
     const requestPayload = {
       message: assembled,
       sessionKey: agent.routingKey, // e.g. "agent:main:main"
@@ -173,11 +197,12 @@ export class DispatchService {
           scheduleId,
           type: "DISPATCHED",
           message: `Dispatched to agent ${agent.routingKey}`,
-          metadata: { gatewayRunId: (response?.runId as string) ?? null },
+          metadata: { gatewayRunId: (response?.runId as string) ?? null, templateId: schedule.templateId },
         },
       });
     } catch (err) {
       const errorText = err instanceof Error ? err.message : String(err);
+      console.error(`[dispatcher] Dispatch failed (scheduleId: ${scheduleId}, taskId: ${task.id}, templateId: ${schedule.templateId}, taskRunId: ${taskRun.id}): ${errorText}`);
       await db.taskRun.update({
         where: { id: taskRun.id },
         data: {
@@ -196,6 +221,7 @@ export class DispatchService {
           taskRunId: taskRun.id,
           type: "FAILED",
           message: `Dispatch failed: ${errorText}`,
+          metadata: { scheduleId, templateId: schedule.templateId },
         },
       });
     }

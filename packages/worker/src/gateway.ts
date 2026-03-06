@@ -1,3 +1,4 @@
+/Users/openclaw/projects/houston-fork/packages/worker/src/gateway.ts
 import WebSocket from "ws";
 import { v4 as uuidv4 } from "uuid";
 import { EventEmitter } from "events";
@@ -26,7 +27,7 @@ const RECONNECT_MAX_MS = 30_000;
 const CLIENT_ID = "gateway-client";
 const CLIENT_MODE = "backend";
 
-// Device identity (we reuse the OpenClaw operator device identity on this host).
+// Device identity (we reuse OpenClaw operator device identity on this host).
 // This avoids re-inventing pairing/device auth for a local dashboard.
 const DEFAULT_DEVICE_IDENTITY_PATH = path.join(
   os.homedir(),
@@ -53,16 +54,12 @@ function derivePublicKeyRaw(publicKeyPem: string): Buffer {
   ) {
     return spki.subarray(ED25519_SPKI_PREFIX.length);
   }
-  return spki;
-}
-
-function publicKeyRawBase64UrlFromPem(publicKeyPem: string): string {
-  return base64UrlEncode(derivePublicKeyRaw(publicKeyPem));
+  throw new Error("Invalid public key format: expected Ed25519");
 }
 
 function signDevicePayload(privateKeyPem: string, payload: string): string {
   const key = crypto.createPrivateKey(privateKeyPem);
-  return base64UrlEncode(crypto.sign(null, Buffer.from(payload, "utf8"), key));
+  return base64UrlEncode(crypto.sign(payload, key));
 }
 
 function normalizeDeviceMetadataForAuth(value: unknown): string {
@@ -129,16 +126,14 @@ function loadDeviceIdentity(filePath = DEFAULT_DEVICE_IDENTITY_PATH): DeviceIden
 
 export class GatewayClient extends EventEmitter {
   private ws: WebSocket | null = null;
-  private url: string = "";
-  private token?: string;
-  private pending = new Map<string, RequestCallback>();
   private connected = false;
-  private reconnectAttempts = 0;
   private shouldReconnect = true;
-  private lastHeartbeat?: Date;
-  private protocolVersion = 3;
+  private reconnectAttempts = 0;
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private pending = new Map<string, RequestCallback>();
+  private lastHeartbeat: Date | undefined;
 
-  async connect(url: string, token?: string): Promise<void> {
+  async connect(url: string, token: string): Promise<void> {
     this.url = url;
     this.token = token;
     this.shouldReconnect = true;
@@ -147,194 +142,199 @@ export class GatewayClient extends EventEmitter {
 
   private _connect(): Promise<void> {
     return new Promise((resolve, reject) => {
-      const ws = new WebSocket(this.url);
-      this.ws = ws;
+      try {
+        // Load device identity for challenge/response
+        const deviceIdentity = loadDeviceIdentity();
+        const publicKeyRaw = derivePublicKeyRaw(deviceIdentity.publicKeyPem);
 
-      const connectTimeout = setTimeout(() => {
-        ws.terminate();
-        reject(new Error("Gateway connection timeout"));
-      }, REQUEST_TIMEOUT_MS);
+        const wsUrl = new URL(this.url);
+        wsUrl.searchParams.set("client_id", CLIENT_ID);
+        wsUrl.searchParams.set("client_mode", CLIENT_MODE);
+        wsUrl.searchParams.set("token", this.token);
+        wsUrl.searchParams.set("device_id", base64UrlEncode(publicKeyRaw));
 
-      let settled = false;
-      const settleOk = () => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(connectTimeout);
-        resolve();
-      };
-      const settleErr = (err: Error) => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(connectTimeout);
-        reject(err);
-      };
+        const ws = new WebSocket(wsUrl.toString());
+        this.ws = ws;
 
-      ws.on("open", () => {
-        // Server will send connect.challenge; we wait.
-        console.log("[gateway] WebSocket connected, waiting for challenge...");
-      });
+        const connectTimeout = setTimeout(() => {
+          ws.terminate();
+          reject(new Error("Gateway connection timeout"));
+        }, REQUEST_TIMEOUT_MS);
 
-      ws.on("message", (data: WebSocket.RawData) => {
-        let msg: {
-          type: string;
-          event?: string;
-          ok?: boolean;
-          id?: string;
-          payload?: unknown;
-          error?: { message?: string } | string;
-          [key: string]: unknown;
+        let settled = false;
+        const settleOk = () => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(connectTimeout);
+          resolve();
         };
-        try {
-          msg = JSON.parse(data.toString());
-        } catch {
-          return;
-        }
+        const settleErr = (err: Error) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(connectTimeout);
+          reject(err);
+        };
 
-        // Handle connect.challenge
-        if (msg.type === "event" && msg.event === "connect.challenge") {
-          const nonce = (msg.payload as { nonce?: string } | undefined)?.nonce;
-          if (!nonce || !nonce.trim()) {
-            settleErr(new Error("connect.challenge missing nonce"));
-            ws.close(1008, "connect.challenge missing nonce");
-            return;
-          }
+        ws.on("open", () => {
+          // Server will send connect.challenge; we wait.
+          console.log("[gateway] WebSocket connected, waiting for challenge...");
+        });
 
-          const role = "operator";
-          const scopes = ["operator.read", "operator.write"]; // minimal
-          const signedAtMs = Date.now();
-          const platform = process.platform; // "darwin" on linc
-
-          let deviceIdentity: DeviceIdentity;
+        ws.on("message", (data: WebSocket.RawData) => {
+          let msg: {
+            type: string;
+            event?: string;
+            ok?: boolean;
+            id?: string;
+            payload?: unknown;
+            error?: { message?: string } | string;
+            [key: string]: unknown;
+          };
           try {
-            deviceIdentity = loadDeviceIdentity();
-          } catch (err) {
-            settleErr(err instanceof Error ? err : new Error(String(err)));
-            ws.close(1008, "device identity load failed");
+            msg = JSON.parse(data.toString());
+          } catch {
             return;
           }
 
-          const deviceFamily = "desktop";
+          // Handle connect.challenge
+          if (msg.type === "event" && msg.event === "connect.challenge") {
+            const nonce = (msg.payload as { nonce?: string } | undefined)?.nonce;
+            if (!nonce || !nonce.trim()) {
+              settleErr(new Error("connect.challenge missing nonce"));
+              ws.close(1008, "connect.challenge missing nonce");
+              return;
+            }
 
-          const payload = buildDeviceAuthPayloadV3({
-            deviceId: deviceIdentity.deviceId,
-            clientId: CLIENT_ID,
-            clientMode: CLIENT_MODE,
-            role,
-            scopes,
-            signedAtMs,
-            token: this.token ?? null,
-            nonce: nonce.trim(),
-            platform,
-            deviceFamily,
-          });
+            const role = "operator";
+            const scopes = ["operator.read", "operator.write"];
+            const signedAtMs = Date.now();
+            const platform = process.platform;
+            const deviceFamily = "desktop";
 
-          const signature = signDevicePayload(deviceIdentity.privateKeyPem, payload);
-
-          const connectRequest = {
-            type: "req",
-            id: "connect",
-            method: "connect",
-            params: {
-              minProtocol: this.protocolVersion,
-              maxProtocol: this.protocolVersion,
-              client: {
-                id: CLIENT_ID,
-                version: "dev",
-                platform,
-                deviceFamily,
-                mode: CLIENT_MODE,
-              },
+            const payload = buildDeviceAuthPayloadV3({
+              deviceId: deviceIdentity.deviceId,
+              clientId: CLIENT_ID,
+              clientMode: CLIENT_MODE,
               role,
               scopes,
-              auth: {
-                token: this.token,
-              },
-              device: {
-                id: deviceIdentity.deviceId,
-                publicKey: publicKeyRawBase64UrlFromPem(deviceIdentity.publicKeyPem),
-                signature,
-                signedAt: signedAtMs,
-                nonce: nonce.trim(),
-              },
-            },
-          };
+              signedAtMs,
+              token: this.token ?? null,
+              nonce: nonce.trim(),
+              platform,
+              deviceFamily,
+            });
 
-          ws.send(JSON.stringify(connectRequest));
-          console.log("[gateway] Sent connect request");
-          return;
-        }
+            const signature = signDevicePayload(deviceIdentity.privateKeyPem, payload);
 
-        // Handle connect response
-        if (msg.type === "res" && msg.id === "connect") {
-          if (msg.ok) {
-            this.connected = true;
-            this.reconnectAttempts = 0;
-            this.lastHeartbeat = new Date();
-            settleOk();
-          } else {
-            const errMsg =
-              typeof msg.error === "string"
-                ? msg.error
-                : msg.error?.message ?? "connect failed";
-            settleErr(new Error(errMsg));
+            const connectRequest = {
+              type: "req",
+              id: "connect",
+              method: "connect",
+              params: {
+                minProtocol: 3,
+                maxProtocol: 3,
+                client: {
+                  id: CLIENT_ID,
+                  version: "dev",
+                  platform,
+                  deviceFamily,
+                  mode: CLIENT_MODE,
+                },
+                role,
+                scopes,
+                auth: {
+                  token: this.token,
+                },
+                device: {
+                  id: deviceIdentity.deviceId,
+                  publicKey: base64UrlEncode(publicKeyRaw),
+                  signature,
+                  signedAt: signedAtMs,
+                  nonce: nonce.trim(),
+                },
+              },
+            };
+
+            ws.send(JSON.stringify(connectRequest));
+            console.log("[gateway] Sent connect request");
+            return;
           }
-          return;
-        }
 
-        this.lastHeartbeat = new Date();
-
-        // Handle responses to pending requests
-        if (msg.type === "res" && msg.id) {
-          const pending = this.pending.get(msg.id);
-          if (pending) {
-            clearTimeout(pending.timeout);
-            this.pending.delete(msg.id);
-            if (msg.ok) pending.resolve(msg.payload);
-            else {
+          // Handle connect response
+          if (msg.type === "res" && msg.id === "connect") {
+            if (msg.ok) {
+              this.connected = true;
+              this.reconnectAttempts = 0;
+              this.lastHeartbeat = new Date();
+              settleOk();
+            } else {
               const errMsg =
                 typeof msg.error === "string"
                   ? msg.error
-                  : msg.error?.message ?? "Gateway error";
-              pending.reject(new Error(errMsg));
+                  : msg.error?.message ?? "connect failed";
+              settleErr(new Error(errMsg));
+            }
+            return;
+          }
+
+          this.lastHeartbeat = new Date();
+
+          // Handle responses to pending requests
+          if (msg.type === "res" && msg.id) {
+            const pending = this.pending.get(msg.id);
+            if (pending) {
+              clearTimeout(pending.timeout);
+              this.pending.delete(msg.id);
+              if (msg.ok) pending.resolve(msg.payload);
+              else {
+                const errMsg =
+                  typeof msg.error === "string"
+                    ? msg.error
+                    : msg.error?.message ?? "Gateway error";
+                pending.reject(new Error(errMsg));
+              }
             }
           }
-          return;
-        }
 
-        // Forward events
-        if (msg.type === "event") {
-          this.emit("event", msg);
-        } else if (msg.type !== "res") {
-          this.emit(msg.type, msg);
-        }
-      });
+          // Forward events
+          if (msg.type === "event") {
+            this.emit("event", msg);
+          } else if (msg.type !== "res") {
+            this.emit(msg.type, msg);
+          }
+        });
 
-      ws.on("error", (err) => {
-        if (!this.connected) {
-          settleErr(err instanceof Error ? err : new Error(String(err)));
-        }
-      });
+        ws.on("error", (err) => {
+          if (!this.connected) {
+            settleErr(err instanceof Error ? err : new Error(String(err)));
+          }
+        });
 
-      ws.on("close", (code, reason) => {
-        const reasonText = reason?.toString() ?? "";
-        if (!this.connected) {
-          settleErr(new Error(`Gateway closed before connect (code=${code} reason=${reasonText})`));
-        }
+        ws.on("close", (code, reason) => {
+          const reasonText = reason?.toString() ?? "";
+          if (!this.connected) {
+            settleErr(new Error(`Gateway closed before connect (code=${code} reason=${reasonText})`));
+          }
 
-        this.connected = false;
+          this.connected = false;
 
-        // Reject all pending
-        for (const [id, cb] of this.pending) {
-          clearTimeout(cb.timeout);
-          cb.reject(new Error("Gateway disconnected"));
-          this.pending.delete(id);
-        }
-        this.emit("disconnect");
+          // Reject all pending
+          for (const [id, cb] of this.pending) {
+            clearTimeout(cb.timeout);
+            cb.reject(new Error("Gateway disconnected"));
+            this.pending.delete(id);
+          }
+          this.emit("disconnect");
 
-        if (this.shouldReconnect) {
-          this._scheduleReconnect();
-        }
-      });
+          if (this.shouldReconnect) {
+            this._scheduleReconnect();
+          }
+        });
+      } catch (err) {
+        const errorText = err instanceof Error ? err.message : String(err);
+        console.error(`[gateway] Connection failed: ${errorText}`);
+        reject(err);
+      }
     });
   }
 

@@ -1,10 +1,10 @@
+/Users/openclaw/projects/houston-fork/packages/worker/src/scheduler.ts
 import PgBoss from "pg-boss";
 import { db } from "@houston/shared";
 import cronParser from "cron-parser";
 import { DispatchService, DispatchJobData } from "./dispatcher.js";
 
-// cron-parser v4 (CJS) exposes parseExpression off the default export when imported from ESM
-const parseCronExpression = cronParser.parseExpression;
+const parseCronExpression = (cronParser as any).parseExpression;
 
 const TICK_INTERVAL_MS =
   parseInt(process.env.HOUSTON_SCHEDULER_TICK_SECONDS ?? "30", 10) * 1000;
@@ -14,6 +14,10 @@ const GRACE_WINDOW_SECONDS = parseInt(
 );
 const LOOKBACK_WINDOW_HOURS = parseInt(
   process.env.HOUSTON_LOOKBACK_WINDOW_HOURS ?? "48",
+  10
+);
+const LOG_RETENTION_DAYS = parseInt(
+  process.env.HOUSTON_LOG_RETENTION_DAYS ?? "30",
   10
 );
 
@@ -67,7 +71,9 @@ export class HoustonScheduler {
 
   async start(): Promise<void> {
     const databaseUrl = process.env.DATABASE_URL;
-    if (!databaseUrl) throw new Error("DATABASE_URL not set");
+    if (!databaseUrl) {
+      throw new Error("DATABASE_URL not set");
+    }
 
     this.boss = new PgBoss({ connectionString: databaseUrl });
     await this.boss.start();
@@ -102,14 +108,33 @@ export class HoustonScheduler {
     for (const schedule of enabledSchedules) {
       // Check if due
       if (schedule.nextRunAt && schedule.nextRunAt <= now) {
-        await this._enqueueDue(schedule);
+        try {
+          await this._enqueueDue(schedule);
+        } catch (err) {
+          const errorText = err instanceof Error ? err.message : String(err);
+          console.error(
+            `[scheduler] Failed to enqueue schedule ${schedule.id}: ${errorText}`
+          );
+        }
       }
 
       // Detect missed runs
-      await this.detectMissedRuns(schedule);
+      try {
+        await this.detectMissedRuns(schedule);
+      } catch (err) {
+        const errorText = err instanceof Error ? err.message : String(err);
+        console.error(
+          `[scheduler] Failed to detect missed runs for schedule ${schedule.id}: ${errorText}`
+        );
+      }
     }
 
-    await this.updateSystemStatus();
+    try {
+      await this.updateSystemStatus();
+    } catch (err) {
+      const errorText = err instanceof Error ? err.message : String(err);
+      console.error(`[scheduler] Failed to update system status: ${errorText}`);
+    }
   }
 
   private async _enqueueDue(schedule: ScheduleRow): Promise<void> {
@@ -196,12 +221,28 @@ export class HoustonScheduler {
   }
 
   private async updateSystemStatus(): Promise<void> {
+    // Update scheduler last tick
     await db.systemStatus.upsert({
       where: { key: "scheduler_last_tick" },
       update: { value: { timestamp: new Date().toISOString() } },
       create: {
         key: "scheduler_last_tick",
         value: { timestamp: new Date().toISOString() },
+      },
+    });
+
+    // Update tasks pending count
+    const pendingCount = await db.task.count({
+      where: {
+        status: { in: ["QUEUE", "IN_PROGRESS"] },
+      },
+    });
+    await db.systemStatus.upsert({
+      where: { key: "tasks_pending" },
+      update: { value: { count: pendingCount, timestamp: new Date().toISOString() } },
+      create: {
+        key: "tasks_pending",
+        value: { count: pendingCount, timestamp: new Date().toISOString() },
       },
     });
   }
@@ -213,6 +254,32 @@ export class HoustonScheduler {
     }
     if (this.boss) {
       await this.boss.stop();
+    }
+  }
+
+  async cleanupOldLogs(): Promise<void> {
+    try {
+      const cutoffDate = new Date();
+      cutoffDate.setDate(cutoffDate.getDate() - LOG_RETENTION_DAYS);
+
+      const deletedLogs = await db.taskLog.deleteMany({
+        where: {
+          createdAt: { lt: cutoffDate },
+        },
+      });
+
+      if (deletedLogs.count > 0) {
+        console.log(
+          `[scheduler] Cleaned up ${deletedLogs.count} old task logs ` +
+            `older than ${LOG_RETENTION_DAYS} days`
+        );
+      }
+    } catch (err) {
+      const errorText = err instanceof Error ? err.message : String(err);
+      console.error(
+        `[scheduler] Failed to cleanup old logs: ${errorText} ` +
+            `(retention: ${LOG_RETENTION_DAYS} days)`
+      );
     }
   }
 }

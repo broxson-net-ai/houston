@@ -1,5 +1,11 @@
+/Users/openclaw/projects/houston-fork/packages/worker/src/events.ts
 import { db, TaskStatus, TaskRunStatus } from "@houston/shared";
 import { GatewayClient, GatewayEvent } from "./gateway.js";
+
+const LOG_RETENTION_DAYS = parseInt(
+  process.env.HOUSTON_LOG_RETENTION_DAYS ?? "30",
+  10
+);
 
 function getMaxLogBytes(): number {
   return parseInt(process.env.MAX_LOG_BYTES ?? "10485760", 10);
@@ -19,7 +25,8 @@ export class GatewayEventHandler {
   start() {
     this.gatewayClient.on("event", (event: GatewayEvent) => {
       this.handleEvent(event).catch((err) => {
-        console.error("[events] Error handling event:", err);
+        const errorText = err instanceof Error ? err.message : String(err);
+        console.error(`[events] Error handling event: ${errorText}`);
       });
     });
   }
@@ -38,7 +45,10 @@ export class GatewayEventHandler {
       include: { task: true },
     });
 
-    if (!taskRun) return;
+    if (!taskRun) {
+      console.warn(`[events] No task run found for gatewayRunId: ${gatewayRunId}`);
+      return;
+    }
 
     const stream = payload?.stream as string | undefined;
     const data = payload?.data as any;
@@ -62,6 +72,7 @@ export class GatewayEventHandler {
             taskRunId: taskRun.id,
             type: "STARTED",
             message: "Run started",
+            metadata: { gatewayRunId },
           },
         });
         return;
@@ -82,6 +93,7 @@ export class GatewayEventHandler {
             taskRunId: taskRun.id,
             type: "COMPLETED",
             message: "Run completed successfully",
+            metadata: { gatewayRunId },
           },
         });
         return;
@@ -89,6 +101,7 @@ export class GatewayEventHandler {
 
       if (phase === "error") {
         const errorText = (data?.error as string) ?? "Run failed";
+        console.error(`[events] Agent error (taskRunId: ${taskRun.id}, taskId: ${taskRun.taskId}): ${errorText}`);
         await db.taskRun.update({
           where: { id: taskRun.id },
           data: {
@@ -107,6 +120,7 @@ export class GatewayEventHandler {
             taskRunId: taskRun.id,
             type: "FAILED",
             message: errorText,
+            metadata: { gatewayRunId },
           },
         });
         return;
@@ -148,6 +162,35 @@ export class GatewayEventHandler {
 
       this.logSizes.set(taskRun.id, Math.min(newSize, MAX_LOG_BYTES));
       return;
+    }
+  }
+
+  /**
+   * Cleanup old task logs beyond retention period
+   */
+  async cleanupOldLogs(): Promise<void> {
+    try {
+      const cutoffDate = new Date();
+      cutoffDate.setDate(cutoffDate.getDate() - LOG_RETENTION_DAYS);
+
+      const deletedLogs = await db.taskLog.deleteMany({
+        where: {
+          createdAt: { lt: cutoffDate },
+        },
+      });
+
+      if (deletedLogs.count > 0) {
+        console.log(
+          `[events] Cleaned up ${deletedLogs.count} old task logs ` +
+            `older than ${LOG_RETENTION_DAYS} days`
+        );
+      }
+    } catch (err) {
+      const errorText = err instanceof Error ? err.message : String(err);
+      console.error(
+        `[events] Failed to cleanup old logs: ${errorText} ` +
+            `(retention: ${LOG_RETENTION_DAYS} days)`
+      );
     }
   }
 }
