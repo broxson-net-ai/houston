@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import MarkdownPreview from "@/components/MarkdownPreview";
+import MarkdownEditor from "@/components/MarkdownEditor";
 import type { ProjectSummary } from "@/lib/projects";
 
 const DOC_LABELS = {
@@ -32,8 +33,10 @@ export default function ProjectsView({ projects: initialProjects }: { projects: 
   const [modalProject, setModalProject] = useState<ProjectSummary | null>(null);
   const [selectedDoc, setSelectedDoc] = useState<ProjectDocType | null>(null);
   const [docContent, setDocContent] = useState("");
+  const [docMtime, setDocMtime] = useState<number | undefined>();
   const [loadingContent, setLoadingContent] = useState(false);
   const [docError, setDocError] = useState("");
+  const [isEditMode, setIsEditMode] = useState(false);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
 
   // Auto-refresh projects every 30 seconds
@@ -100,6 +103,8 @@ export default function ProjectsView({ projects: initialProjects }: { projects: 
     setLoadingContent(true);
     setDocError("");
     setDocContent("");
+    setDocMtime(undefined);
+    setIsEditMode(false);
 
     try {
       const res = await fetch(
@@ -108,6 +113,7 @@ export default function ProjectsView({ projects: initialProjects }: { projects: 
       if (!res.ok) throw new Error("Failed to load project document");
       const data = await res.json();
       setDocContent(data.content ?? "");
+      setDocMtime(data.mtime);
     } catch (err) {
       console.error("Failed to load project document:", err);
       setDocError("Failed to load project document");
@@ -116,12 +122,53 @@ export default function ProjectsView({ projects: initialProjects }: { projects: 
     }
   }
 
+  async function saveDoc(content: string) {
+    if (!modalProject || !selectedDoc) {
+      throw new Error("No project or document selected");
+    }
+
+    const res = await fetch(
+      `/api/projects/${encodeURIComponent(modalProject.slug)}/doc?doc=${encodeURIComponent(selectedDoc)}`,
+      {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          content,
+          expectedMtime: docMtime,
+        }),
+      }
+    );
+
+    if (!res.ok) {
+      const data = await res.json();
+      if (data.conflict) {
+        throw new Error("File was modified externally. Please reload from disk or discard draft.");
+      }
+      throw new Error(data.error || "Failed to save document");
+    }
+
+    // Reload the document after successful save
+    await viewDoc(modalProject, selectedDoc);
+  }
+
   function closeDocModal() {
     setModalProject(null);
     setSelectedDoc(null);
     setDocContent("");
+    setDocMtime(undefined);
     setDocError("");
+    setIsEditMode(false);
     setLoadingContent(false);
+  }
+
+  function enterEditMode() {
+    setIsEditMode(true);
+  }
+
+  function exitEditMode() {
+    setIsEditMode(false);
   }
 
   return (
@@ -272,36 +319,59 @@ export default function ProjectsView({ projects: initialProjects }: { projects: 
           onClick={closeDocModal}
         >
           <div
-            className="max-h-[80vh] w-full max-w-4xl overflow-auto rounded-lg border bg-background p-6 shadow-lg"
+            className="max-h-[80vh] w-full max-w-6xl overflow-auto rounded-lg border bg-background p-6 shadow-lg"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="mb-4 flex items-center justify-between">
-              <div>
-                <h2 className="text-2xl font-bold font-mono">{DOC_LABELS[selectedDoc]}</h2>
-                <p className="text-sm text-muted-foreground font-mono">
-                  {modalProject.slug} / {DOC_LABELS[selectedDoc]}
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={closeDocModal}
-                className="rounded-md border px-3 py-1 text-sm hover:bg-muted"
-              >
-                Close
-              </button>
-            </div>
-            {loadingContent && (
-              <div className="flex items-center justify-center py-12 text-muted-foreground">
-                Loading...
-              </div>
-            )}
-            {docError && (
-              <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-red-800 dark:border-red-900 dark:bg-red-950 dark:text-red-200">
-                {docError}
-              </div>
-            )}
-            {!loadingContent && !docError && docContent && (
-              <MarkdownPreview content={docContent} />
+            {isEditMode ? (
+              <MarkdownEditor
+                slug={modalProject.slug}
+                doc={selectedDoc}
+                initialContent={docContent}
+                onClose={exitEditMode}
+                onSave={saveDoc}
+                title={DOC_LABELS[selectedDoc]}
+              />
+            ) : (
+              <>
+                <div className="mb-4 flex items-center justify-between">
+                  <div>
+                    <h2 className="text-2xl font-bold font-mono">{DOC_LABELS[selectedDoc]}</h2>
+                    <p className="text-sm text-muted-foreground font-mono">
+                      {modalProject.slug} / {DOC_LABELS[selectedDoc]}
+                    </p>
+                  </div>
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={enterEditMode}
+                      disabled={loadingContent}
+                      className="rounded-md bg-primary px-3 py-1 text-sm text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+                    >
+                      Edit
+                    </button>
+                    <button
+                      type="button"
+                      onClick={closeDocModal}
+                      className="rounded-md border px-3 py-1 text-sm hover:bg-muted"
+                    >
+                      Close
+                    </button>
+                  </div>
+                </div>
+                {loadingContent && (
+                  <div className="flex items-center justify-center py-12 text-muted-foreground">
+                    Loading...
+                  </div>
+                )}
+                {docError && (
+                  <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-red-800 dark:border-red-900 dark:bg-red-950 dark:text-red-200">
+                    {docError}
+                  </div>
+                )}
+                {!loadingContent && !docError && docContent && (
+                  <MarkdownPreview content={docContent} />
+                )}
+              </>
             )}
           </div>
         </div>
