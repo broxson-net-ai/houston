@@ -10,6 +10,8 @@ type Agent = {
   avatarUrl?: string | null;
   tags: string[];
   enabled: boolean;
+  runtimePresent?: boolean | null;
+  stale?: boolean;
 };
 
 type AgentFormData = {
@@ -127,6 +129,7 @@ export default function AgentsPage() {
                 <th className="text-left p-3 font-medium">Routing Key</th>
                 <th className="text-left p-3 font-medium">Tags</th>
                 <th className="text-left p-3 font-medium">Enabled</th>
+                <th className="text-left p-3 font-medium">Runtime</th>
                 <th className="text-left p-3 font-medium">Actions</th>
               </tr>
             </thead>
@@ -150,6 +153,17 @@ export default function AgentsPage() {
                     </span>
                   </td>
                   <td className="p-3">
+                    {agent.runtimePresent === true && (
+                      <span className="text-xs px-2 py-0.5 rounded-full bg-green-100 text-green-800">Live</span>
+                    )}
+                    {agent.runtimePresent === false && (
+                      <span className="text-xs px-2 py-0.5 rounded-full bg-amber-100 text-amber-800">Stale</span>
+                    )}
+                    {agent.runtimePresent == null && (
+                      <span className="text-xs px-2 py-0.5 rounded-full bg-gray-100 text-gray-700">Unknown</span>
+                    )}
+                  </td>
+                  <td className="p-3">
                     <div className="flex gap-2">
                       <button
                         onClick={() => openEdit(agent)}
@@ -169,7 +183,7 @@ export default function AgentsPage() {
               ))}
               {agents.length === 0 && (
                 <tr>
-                  <td colSpan={5} className="p-6 text-center text-muted-foreground">
+                  <td colSpan={6} className="p-6 text-center text-muted-foreground">
                     No agents yet. Create one to get started.
                   </td>
                 </tr>
