@@ -53,7 +53,7 @@ export async function PATCH(
 
   const defaultOutcome =
     decision === "DENIED"
-      ? "blocked: denied by reviewer"
+      ? "pending blocked apply"
       : decision === "REVISED"
         ? "revision captured; pending redispatch"
         : null;

@@ -349,6 +349,7 @@ export class DispatchService {
         OR: [
           { outcome: null },
           { outcome: { startsWith: "resume failed:" } },
+          { outcome: { startsWith: "pending blocked apply" } },
           { outcome: { startsWith: "revision captured;" } },
         ],
       },
