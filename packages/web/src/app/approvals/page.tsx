@@ -54,21 +54,41 @@ type ApprovalSummary = {
   }>;
 };
 
+type TrustVerification = {
+  checkedAt: string;
+  windowHours: number;
+  trustDefault: string;
+  trustModes: Record<string, string>;
+  total: number;
+  autoApproved: number;
+  manualApproved: number;
+  pending: number;
+  denied: number;
+  revised: number;
+  flaggedCriticalAuto: Array<{ trigger: string; autoApproved: number }>;
+};
+
 export default function ApprovalsPage() {
   const [requests, setRequests] = useState<ApprovalRequest[]>([]);
   const [filter, setFilter] = useState<"PENDING" | "APPROVED" | "DENIED" | "REVISED" | "ALL">("PENDING");
   const [trustFilter, setTrustFilter] = useState<"ALL" | "AUTO_ONLY" | "MANUAL_ONLY">("ALL");
   const [summary, setSummary] = useState<ApprovalSummary | null>(null);
+  const [trustHealth, setTrustHealth] = useState<TrustVerification | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [actionReason, setActionReason] = useState("");
   const [revisionText, setRevisionText] = useState("");
   const [error, setError] = useState("");
 
   async function loadRequests() {
-    const res = await fetch(`/api/approvals?decision=${filter}&trust=${trustFilter}&includeSummary=1&windowHours=48`);
-    const data = await res.json();
+    const [approvalsRes, trustRes] = await Promise.all([
+      fetch(`/api/approvals?decision=${filter}&trust=${trustFilter}&includeSummary=1&windowHours=48`),
+      fetch("/api/system/trust"),
+    ]);
+    const data = await approvalsRes.json();
+    const trustData = await trustRes.json();
     setRequests(data.requests ?? []);
     setSummary(data.summary ?? null);
+    setTrustHealth(trustData.value ?? null);
   }
 
   useEffect(() => {
@@ -211,6 +231,44 @@ export default function ApprovalsPage() {
             <div className="border rounded-lg p-3">
               <div className="text-xs text-muted-foreground">Revised</div>
               <div className="font-semibold text-purple-700">{summary.revised}</div>
+            </div>
+          </div>
+        )}
+
+        {trustHealth && (
+          <div className="border rounded-lg p-3 space-y-2">
+            <div className="flex items-center justify-between">
+              <h2 className="font-semibold">Trust Health</h2>
+              <span className={`text-xs px-2 py-0.5 rounded-full ${
+                trustHealth.flaggedCriticalAuto.length > 0 ? "bg-red-100 text-red-800" : "bg-green-100 text-green-800"
+              }`}>
+                {trustHealth.flaggedCriticalAuto.length > 0 ? "Attention" : "Healthy"}
+              </span>
+            </div>
+            <div className="grid grid-cols-2 md:grid-cols-5 gap-2 text-xs">
+              <div className="border rounded p-2">
+                <div className="text-muted-foreground">Last check</div>
+                <div>{new Date(trustHealth.checkedAt).toLocaleString()}</div>
+              </div>
+              <div className="border rounded p-2">
+                <div className="text-muted-foreground">Window</div>
+                <div>{trustHealth.windowHours}h</div>
+              </div>
+              <div className="border rounded p-2">
+                <div className="text-muted-foreground">Default mode</div>
+                <div>{trustHealth.trustDefault}</div>
+              </div>
+              <div className="border rounded p-2">
+                <div className="text-muted-foreground">Auto/manual</div>
+                <div>{trustHealth.autoApproved}/{trustHealth.manualApproved}</div>
+              </div>
+              <div className="border rounded p-2">
+                <div className="text-muted-foreground">Critical auto</div>
+                <div>{trustHealth.flaggedCriticalAuto.length}</div>
+              </div>
+            </div>
+            <div className="text-xs text-muted-foreground">
+              Modes: {Object.entries(trustHealth.trustModes).map(([k, v]) => `${k}=${v}`).join(", ") || "none"}
             </div>
           </div>
         )}

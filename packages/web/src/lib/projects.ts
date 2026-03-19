@@ -362,7 +362,7 @@ function writeProjectDocWithFrontmatter(
   const raw = fs.existsSync(docPath) ? fs.readFileSync(docPath, "utf8") : "";
   const parsed = matter(raw);
   const merged = { ...(parsed.data as Record<string, unknown>), ...nextData };
-  const serialized = matter.stringify(parsed.content, merged, { lineWidth: 0 });
+  const serialized = matter.stringify(parsed.content, merged);
   fs.writeFileSync(docPath, serialized, "utf8");
 
   // Check if content was modified (conflict detection)
@@ -493,7 +493,7 @@ ${summary ?? "Describe this project in one paragraph."}
 - None yet.
 `;
 
-  return matter.stringify(content, yaml, { lineWidth: 0 });
+  return matter.stringify(content, yaml);
 }
 
 function actionPlanTemplate(name: string) {
@@ -565,7 +565,7 @@ function checkForConflict(docPath: string): boolean {
 
   const raw = fs.existsSync(docPath) ? fs.readFileSync(docPath, "utf8") : "";
   const parsed = matter(raw);
-  const serialized = matter.stringify(parsed.content, parsed.content, { lineWidth: 0 });
+  const serialized = matter.stringify(parsed.content, parsed.data as Record<string, unknown>);
 
   const newHash = crypto.createHash("sha256").update(serialized).digest("hex");
   return currentHash !== newHash;

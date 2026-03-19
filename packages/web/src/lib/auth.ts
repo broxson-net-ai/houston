@@ -51,7 +51,6 @@ export const authOptions: NextAuthOptions = {
     strategy: "jwt",
   },
   secret: process.env.NEXTAUTH_SECRET,
-  trustHost: true, // Allow Tailscale hostname
   callbacks: {
     async jwt({ token, user }) {
       if (user) {
