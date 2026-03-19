@@ -1,4 +1,5 @@
 import { db, TaskStatus, TaskRunStatus } from "@houston/shared";
+import { createHash } from "crypto";
 import { v4 as uuidv4 } from "uuid";
 import { GatewayClient } from "./gateway.js";
 
@@ -12,6 +13,8 @@ type ApprovalTrigger =
   | "contact-write"
   | "record-write"
   | "workflow-side-effect";
+
+type TrustMode = "always" | "once-per-session" | "once-ever" | "auto";
 
 function deriveRoleFromRoutingKey(routingKey: string): string {
   const m = String(routingKey || "").match(/^agent:([^:]+):/i);
@@ -49,6 +52,66 @@ function triggerSeverity(trigger: ApprovalTrigger): "LOW" | "MEDIUM" | "HIGH" | 
   if (trigger === "destructive-op" || trigger === "production-change") return "CRITICAL";
   if (trigger === "external-send" || trigger === "service-restart" || trigger === "config-change") return "HIGH";
   return "MEDIUM";
+}
+
+function normalizeTrustMode(value: unknown): TrustMode | null {
+  if (typeof value !== "string") return null;
+  const normalized = value.trim().toLowerCase();
+  if (
+    normalized === "always" ||
+    normalized === "once-per-session" ||
+    normalized === "once-ever" ||
+    normalized === "auto"
+  ) {
+    return normalized;
+  }
+  return null;
+}
+
+function parseTrustModeConfig(): Record<string, TrustMode> {
+  const raw = process.env.HOUSTON_APPROVAL_TRUST_MODES;
+  if (!raw) return {};
+  try {
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    const out: Record<string, TrustMode> = {};
+    for (const [key, value] of Object.entries(parsed)) {
+      const mode = normalizeTrustMode(value);
+      if (mode) out[key] = mode;
+    }
+    return out;
+  } catch {
+    console.warn("[dispatcher] Invalid HOUSTON_APPROVAL_TRUST_MODES JSON; using defaults");
+    return {};
+  }
+}
+
+function resolveTrustMode(role: string, trigger: ApprovalTrigger): TrustMode {
+  const trustModeConfig = parseTrustModeConfig();
+  const trustModeDefault: TrustMode =
+    normalizeTrustMode(process.env.HOUSTON_APPROVAL_TRUST_DEFAULT) ?? "always";
+
+  const exact = trustModeConfig[`${role}.${trigger}`];
+  if (exact) return exact;
+
+  const roleWildcard = trustModeConfig[`${role}.*`];
+  if (roleWildcard) return roleWildcard;
+
+  const triggerWildcard = trustModeConfig[`*.${trigger}`];
+  if (triggerWildcard) return triggerWildcard;
+
+  return trustModeConfig.default ?? trustModeDefault;
+}
+
+function approvalPattern(role: string, trigger: ApprovalTrigger, assembled: string): string {
+  const canonical = assembled.toLowerCase().replace(/\s+/g, " ").trim();
+  return createHash("sha256").update(`${role}|${trigger}|${canonical}`).digest("hex").slice(0, 16);
+}
+
+function parseContextObject(value: unknown): Record<string, unknown> {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
+  }
+  return {};
 }
 
 export type DispatchJobData = {
@@ -199,6 +262,8 @@ export class DispatchService {
 
     const role = deriveRoleFromRoutingKey(agent.routingKey);
     const approvalTrigger = detectApprovalTrigger(role, assembled);
+    const triggerMode = approvalTrigger ? resolveTrustMode(role, approvalTrigger) : null;
+    const pattern = approvalTrigger ? approvalPattern(role, approvalTrigger, assembled) : null;
 
     // Idempotency key: scheduleId + dueAt
     const idempotencyKey = `dispatch:${scheduleId}:${dueAt}`;
@@ -249,62 +314,143 @@ export class DispatchService {
     });
 
     if (approvalTrigger) {
+      let requiresApproval = true;
+
+      if (triggerMode === "auto") {
+        requiresApproval = false;
+      } else if (triggerMode === "once-per-session" || triggerMode === "once-ever") {
+        const approvedHistory = await db.approvalRequest.findMany({
+          where: {
+            decision: "APPROVED",
+            role,
+            trigger: approvalTrigger,
+          },
+          orderBy: { decidedAt: "desc" },
+          take: 200,
+        });
+
+        const hasMatch = approvedHistory.some((item) => {
+          const ctx = parseContextObject(item.context);
+          const approvedPattern = typeof ctx.approvalPattern === "string" ? ctx.approvalPattern : null;
+          if (!approvedPattern || approvedPattern !== pattern) return false;
+          if (triggerMode === "once-ever") return true;
+          const approvedSessionId = typeof ctx.sessionId === "string" ? ctx.sessionId : null;
+          return approvedSessionId === agent.routingKey;
+        });
+
+        requiresApproval = !hasMatch;
+      }
+
       const requestId = `approval:${taskRun.id}:${approvalTrigger}`;
       const existingApproval = await db.approvalRequest.findUnique({ where: { requestId } });
+
+      const baseApprovalData = {
+        requestId,
+        role,
+        trigger: approvalTrigger,
+        severity: triggerSeverity(approvalTrigger),
+        intent: `Approval required before dispatching task ${task.id}`,
+        target: agent.routingKey,
+        risk: `Task instructions matched trigger '${approvalTrigger}' for role '${role}'.`,
+        rollback: "Do not dispatch task until approved.",
+        budget: {
+          toolCallsUsed: 0,
+          runtimeMinutes: 0,
+          previousApprovalsThisTask: 0,
+        },
+        context: {
+          taskId: task.id,
+          projectId: task.projectId,
+          sessionId: agent.routingKey,
+          approvalPattern: pattern,
+          trustMode: triggerMode,
+        },
+        taskRunId: taskRun.id,
+      };
+
       const approval = existingApproval
         ? existingApproval
         : await db.approvalRequest.create({
-            data: {
-              requestId,
-              role,
-              trigger: approvalTrigger,
-              severity: triggerSeverity(approvalTrigger),
-              intent: `Approval required before dispatching task ${task.id}`,
-              target: agent.routingKey,
-              risk: `Task instructions matched trigger '${approvalTrigger}' for role '${role}'.`,
-              rollback: "Do not dispatch task until approved.",
-              budget: {
-                toolCallsUsed: 0,
-                runtimeMinutes: 0,
-                previousApprovalsThisTask: 0,
-              },
-              context: {
-                taskId: task.id,
-                projectId: task.projectId,
-                sessionId: agent.routingKey,
-              },
-              taskRunId: taskRun.id,
-            },
+            data: requiresApproval
+              ? baseApprovalData
+              : {
+                  ...baseApprovalData,
+                  decision: "APPROVED",
+                  decider: "policy:trust-ladder",
+                  reason: `Auto-approved by trust mode '${triggerMode}'`,
+                  outcome: "auto-approved inline; dispatched",
+                  decidedAt: new Date(),
+                },
           });
 
-      await db.taskEvent.create({
-        data: {
-          taskId: task.id,
-          taskRunId: taskRun.id,
-          scheduleId,
-          type: "QUEUED",
-          message: `Awaiting approval (${approvalTrigger}) before dispatch`,
-          metadata: {
-            approvalRequestId: approval.id,
-            trigger: approvalTrigger,
-            role,
-            templateId: schedule.templateId,
+      if (!requiresApproval) {
+        await db.taskEvent.create({
+          data: {
+            taskId: task.id,
+            taskRunId: taskRun.id,
+            scheduleId,
+            type: "STATUS_CHANGED",
+            message: `Approval auto-satisfied (${triggerMode}) before dispatch`,
+            metadata: {
+              approvalRequestId: approval.id,
+              trigger: approvalTrigger,
+              role,
+              templateId: schedule.templateId,
+              trustMode: triggerMode,
+              approvalPattern: pattern,
+            },
           },
-        },
-      });
+        });
 
-      await db.taskRun.update({
-        where: { id: taskRun.id },
-        data: {
-          responsePayload: {
-            approvalPending: true,
-            approvalRequestId: approval.id,
-            trigger: approvalTrigger,
+        await db.taskRun.update({
+          where: { id: taskRun.id },
+          data: {
+            responsePayload: {
+              approvalPending: false,
+              approvalAutoSatisfied: true,
+              approvalRequestId: approval.id,
+              trigger: approvalTrigger,
+              trustMode: triggerMode,
+              approvalPattern: pattern,
+            },
           },
-        },
-      });
+        });
+      }
 
-      return;
+      if (requiresApproval) {
+        await db.taskEvent.create({
+          data: {
+            taskId: task.id,
+            taskRunId: taskRun.id,
+            scheduleId,
+            type: "QUEUED",
+            message: `Awaiting approval (${approvalTrigger}) before dispatch`,
+            metadata: {
+              approvalRequestId: approval.id,
+              trigger: approvalTrigger,
+              role,
+              templateId: schedule.templateId,
+              trustMode: triggerMode,
+              approvalPattern: pattern,
+            },
+          },
+        });
+
+        await db.taskRun.update({
+          where: { id: taskRun.id },
+          data: {
+            responsePayload: {
+              approvalPending: true,
+              approvalRequestId: approval.id,
+              trigger: approvalTrigger,
+              trustMode: triggerMode,
+              approvalPattern: pattern,
+            },
+          },
+        });
+
+        return;
+      }
     }
 
     const dispatchResult = await this.dispatchTaskRunToGateway({
