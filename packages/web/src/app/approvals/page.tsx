@@ -72,6 +72,7 @@ export default function ApprovalsPage() {
   const [requests, setRequests] = useState<ApprovalRequest[]>([]);
   const [filter, setFilter] = useState<"PENDING" | "APPROVED" | "DENIED" | "REVISED" | "ALL">("PENDING");
   const [trustFilter, setTrustFilter] = useState<"ALL" | "AUTO_ONLY" | "MANUAL_ONLY">("ALL");
+  const [triggerFilter, setTriggerFilter] = useState<string>("ALL");
   const [summary, setSummary] = useState<ApprovalSummary | null>(null);
   const [trustHealth, setTrustHealth] = useState<TrustVerification | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -81,7 +82,7 @@ export default function ApprovalsPage() {
 
   async function loadRequests() {
     const [approvalsRes, trustRes] = await Promise.all([
-      fetch(`/api/approvals?decision=${filter}&trust=${trustFilter}&includeSummary=1&windowHours=48`),
+      fetch(`/api/approvals?decision=${filter}&trust=${trustFilter}&trigger=${encodeURIComponent(triggerFilter)}&includeSummary=1&windowHours=48`),
       fetch("/api/system/trust"),
     ]);
     const data = await approvalsRes.json();
@@ -93,7 +94,7 @@ export default function ApprovalsPage() {
 
   useEffect(() => {
     loadRequests();
-  }, [filter, trustFilter]);
+  }, [filter, trustFilter, triggerFilter]);
 
   async function handleDecision(id: string, decision: "APPROVED" | "DENIED" | "REVISED") {
     setError("");
@@ -199,6 +200,21 @@ export default function ApprovalsPage() {
                 </button>
               ))}
             </div>
+            <div className="flex items-center gap-2 text-xs">
+              <span className="text-muted-foreground">Trigger:</span>
+              <select
+                value={triggerFilter}
+                onChange={(e) => setTriggerFilter(e.target.value)}
+                className="px-2 py-1 border rounded-md bg-background"
+              >
+                <option value="ALL">All triggers</option>
+                {(summary?.byTrigger ?? []).map((row) => (
+                  <option key={row.trigger} value={row.trigger}>
+                    {row.trigger}
+                  </option>
+                ))}
+              </select>
+            </div>
           </div>
         </div>
 
@@ -270,6 +286,38 @@ export default function ApprovalsPage() {
             <div className="text-xs text-muted-foreground">
               Modes: {Object.entries(trustHealth.trustModes).map(([k, v]) => `${k}=${v}`).join(", ") || "none"}
             </div>
+            <div className="flex flex-wrap gap-2">
+              <button
+                onClick={() => {
+                  setFilter("APPROVED");
+                  setTrustFilter("AUTO_ONLY");
+                  setTriggerFilter("ALL");
+                }}
+                className="px-2 py-1 text-xs rounded-md border"
+              >
+                Show Auto Approvals
+              </button>
+              <button
+                onClick={() => {
+                  setFilter("APPROVED");
+                  setTrustFilter("MANUAL_ONLY");
+                  setTriggerFilter("ALL");
+                }}
+                className="px-2 py-1 text-xs rounded-md border"
+              >
+                Show Manual Approvals
+              </button>
+              <button
+                onClick={() => {
+                  setFilter("DENIED");
+                  setTrustFilter("ALL");
+                  setTriggerFilter("ALL");
+                }}
+                className="px-2 py-1 text-xs rounded-md border"
+              >
+                Show Denials
+              </button>
+            </div>
           </div>
         )}
 
@@ -291,7 +339,14 @@ export default function ApprovalsPage() {
               <tbody>
                 {summary.byTrigger.slice(0, 12).map((row) => (
                   <tr key={row.trigger} className="border-t">
-                    <td className="p-2 font-mono">{row.trigger}</td>
+                    <td className="p-2 font-mono">
+                      <button
+                        onClick={() => setTriggerFilter(row.trigger)}
+                        className="underline underline-offset-2"
+                      >
+                        {row.trigger}
+                      </button>
+                    </td>
                     <td className="p-2">{row.total}</td>
                     <td className="p-2">{row.manualApproved}</td>
                     <td className="p-2">{row.autoApproved}</td>

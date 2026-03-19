@@ -13,6 +13,7 @@ export async function GET(req: NextRequest) {
   const decision = searchParams.get("decision") || "PENDING";
   const severity = searchParams.get("severity");
   const trust = searchParams.get("trust") || "ALL";
+  const trigger = searchParams.get("trigger") || "ALL";
   const includeSummary = searchParams.get("includeSummary") === "1";
   const windowHours = Math.max(1, Number(searchParams.get("windowHours") || "48"));
 
@@ -22,6 +23,9 @@ export async function GET(req: NextRequest) {
   }
   if (severity) {
     where.severity = severity;
+  }
+  if (trigger !== "ALL") {
+    where.trigger = trigger;
   }
   if (trust === "AUTO_ONLY") {
     where.decider = "policy:trust-ladder";

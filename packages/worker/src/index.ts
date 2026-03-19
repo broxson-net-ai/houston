@@ -1,4 +1,5 @@
 import "dotenv/config";
+import { createHash } from "crypto";
 
 import { scanSkills } from "./skills-scanner.js";
 import { HoustonScheduler } from "./scheduler.js";
@@ -12,6 +13,9 @@ const SKILLS_SCAN_INTERVAL_MS = 60_000;
 const APPROVAL_RESUME_INTERVAL_MS = Number(process.env.APPROVAL_RESUME_INTERVAL_MS ?? "10000");
 const TRUST_VERIFY_INTERVAL_MS = Number(process.env.HOUSTON_TRUST_VERIFY_INTERVAL_MS ?? "3600000");
 const TRUST_VERIFY_WINDOW_HOURS = Number(process.env.HOUSTON_TRUST_VERIFY_WINDOW_HOURS ?? "48");
+const OPS_ALERT_WEBHOOK_URL = process.env.HOUSTON_OPS_ALERT_WEBHOOK_URL ?? "";
+const OPS_ALERT_MIN_INTERVAL_MS = Number(process.env.HOUSTON_OPS_ALERT_MIN_INTERVAL_MS ?? "900000");
+const TRUST_LAST_ALERT_KEY = "trust_ladder_last_alert";
 
 function parseTrustModes(): Record<string, string> {
   const raw = process.env.HOUSTON_APPROVAL_TRUST_MODES;
@@ -98,6 +102,63 @@ async function main() {
   let approvalResumeTimer: ReturnType<typeof setInterval> | null = null;
   let trustVerifyTimer: ReturnType<typeof setInterval> | null = null;
 
+  const sendOpsAlert = async (kind: string, message: string, details: Record<string, unknown>) => {
+    if (!OPS_ALERT_WEBHOOK_URL) return;
+
+    const now = Date.now();
+    const fingerprint = createHash("sha256")
+      .update(JSON.stringify({ kind, message, details }))
+      .digest("hex")
+      .slice(0, 16);
+
+    const last = await db.systemStatus.findUnique({ where: { key: TRUST_LAST_ALERT_KEY } });
+    const lastValue = (last?.value ?? {}) as Record<string, unknown>;
+    const lastFingerprint = typeof lastValue.fingerprint === "string" ? lastValue.fingerprint : "";
+    const lastSentAtMs = typeof lastValue.sentAtMs === "number" ? lastValue.sentAtMs : 0;
+
+    if (lastFingerprint === fingerprint && now - lastSentAtMs < Math.max(60_000, OPS_ALERT_MIN_INTERVAL_MS)) {
+      return;
+    }
+
+    const body = {
+      text: `[Houston] ${message}`,
+      kind,
+      details,
+      timestamp: new Date(now).toISOString(),
+    };
+
+    const res = await fetch(OPS_ALERT_WEBHOOK_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+
+    if (!res.ok) {
+      throw new Error(`ops alert webhook failed: ${res.status}`);
+    }
+
+    await db.systemStatus.upsert({
+      where: { key: TRUST_LAST_ALERT_KEY },
+      create: {
+        key: TRUST_LAST_ALERT_KEY,
+        value: {
+          kind,
+          fingerprint,
+          sentAtMs: now,
+          sentAt: new Date(now).toISOString(),
+        },
+      },
+      update: {
+        value: {
+          kind,
+          fingerprint,
+          sentAtMs: now,
+          sentAt: new Date(now).toISOString(),
+        },
+      },
+    });
+  };
+
   const runTrustVerification = async () => {
     const now = Date.now();
     const since = new Date(now - Math.max(1, TRUST_VERIFY_WINDOW_HOURS) * 60 * 60 * 1000);
@@ -175,6 +236,21 @@ async function main() {
 
     if (flaggedCriticalAuto.length > 0) {
       console.warn(`[worker] Trust verification warning: critical auto approvals detected (${JSON.stringify(flaggedCriticalAuto)})`);
+      try {
+        await sendOpsAlert(
+          "trust-critical-auto",
+          "Trust verification found auto approvals in critical triggers",
+          {
+            flaggedCriticalAuto,
+            windowHours: Math.max(1, TRUST_VERIFY_WINDOW_HOURS),
+            trustDefault: process.env.HOUSTON_APPROVAL_TRUST_DEFAULT ?? "always",
+            trustModes: parseTrustModes(),
+          }
+        );
+      } catch (err) {
+        const errorText = err instanceof Error ? err.message : String(err);
+        console.error(`[worker] Failed to send trust warning alert: ${errorText}`);
+      }
     } else {
       console.log(`[worker] Trust verification ok: auto=${autoApproved} manual=${manualApproved} pending=${pending} denied=${denied} revised=${revised}`);
     }
@@ -191,12 +267,24 @@ async function main() {
     runTrustVerification().catch((err) => {
       const errorText = err instanceof Error ? err.message : String(err);
       console.error(`[worker] Initial trust verification failed: ${errorText}`);
+      sendOpsAlert("trust-verification-failed", "Initial trust verification failed", {
+        error: errorText,
+      }).catch((alertErr) => {
+        const alertText = alertErr instanceof Error ? alertErr.message : String(alertErr);
+        console.error(`[worker] Failed to send trust failure alert: ${alertText}`);
+      });
     });
 
     trustVerifyTimer = setInterval(() => {
       runTrustVerification().catch((err) => {
         const errorText = err instanceof Error ? err.message : String(err);
         console.error(`[worker] Trust verification failed: ${errorText}`);
+        sendOpsAlert("trust-verification-failed", "Trust verification failed", {
+          error: errorText,
+        }).catch((alertErr) => {
+          const alertText = alertErr instanceof Error ? alertErr.message : String(alertErr);
+          console.error(`[worker] Failed to send trust failure alert: ${alertText}`);
+        });
       });
     }, TRUST_VERIFY_INTERVAL_MS);
   }
