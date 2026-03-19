@@ -1,4 +1,3 @@
-/Users/openclaw/projects/houston-fork/packages/worker/src/index.ts
 import "dotenv/config";
 
 import { scanSkills } from "./skills-scanner.js";
@@ -10,6 +9,7 @@ import { db } from "@houston/shared";
 
 const SKILLS_PATH = process.env.OPENCLAW_SKILLS_PATH ?? "";
 const SKILLS_SCAN_INTERVAL_MS = 60_000;
+const APPROVAL_RESUME_INTERVAL_MS = Number(process.env.APPROVAL_RESUME_INTERVAL_MS ?? "10000");
 
 async function main() {
   console.log("[worker] Houston worker started");
@@ -78,6 +78,15 @@ async function main() {
 
   // Dispatcher
   const dispatchService = new DispatchService(gatewayClient);
+  let approvalResumeTimer: ReturnType<typeof setInterval> | null = null;
+  if (gatewayClient) {
+    approvalResumeTimer = setInterval(() => {
+      dispatchService.resumeApprovedRequests().catch((err) => {
+        const errorText = err instanceof Error ? err.message : String(err);
+        console.error(`[worker] Failed to resume approved requests: ${errorText}`);
+      });
+    }, APPROVAL_RESUME_INTERVAL_MS);
+  }
 
   // Event handler
   let eventHandler: GatewayEventHandler | undefined;
@@ -144,6 +153,11 @@ async function main() {
     if (heartbeatTimer) {
       clearInterval(heartbeatTimer);
       console.log("[worker] Heartbeat timer stopped");
+    }
+
+    if (approvalResumeTimer) {
+      clearInterval(approvalResumeTimer);
+      console.log("[worker] Approval resume timer stopped");
     }
 
     if (gatewayClient) {

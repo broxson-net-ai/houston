@@ -1,4 +1,3 @@
-/Users/openclaw/projects/houston-fork/packages/worker/src/scheduler.ts
 import PgBoss from "pg-boss";
 import { db } from "@houston/shared";
 import cronParser from "cron-parser";

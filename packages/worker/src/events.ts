@@ -1,4 +1,3 @@
-/Users/openclaw/projects/houston-fork/packages/worker/src/events.ts
 import { db, TaskStatus, TaskRunStatus } from "@houston/shared";
 import { GatewayClient, GatewayEvent } from "./gateway.js";
 

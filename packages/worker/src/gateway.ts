@@ -1,4 +1,3 @@
-/Users/openclaw/projects/houston-fork/packages/worker/src/gateway.ts
 import WebSocket from "ws";
 import { v4 as uuidv4 } from "uuid";
 import { EventEmitter } from "events";
@@ -59,7 +58,8 @@ function derivePublicKeyRaw(publicKeyPem: string): Buffer {
 
 function signDevicePayload(privateKeyPem: string, payload: string): string {
   const key = crypto.createPrivateKey(privateKeyPem);
-  return base64UrlEncode(crypto.sign(payload, key));
+  const signature = crypto.sign(null, Buffer.from(payload, "utf8"), key);
+  return base64UrlEncode(signature);
 }
 
 function normalizeDeviceMetadataForAuth(value: unknown): string {

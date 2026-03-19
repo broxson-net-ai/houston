@@ -21,13 +21,16 @@ const mockDb = vi.hoisted(() => ({
     create: vi.fn(),
     update: vi.fn(),
     findFirst: vi.fn(),
+    findUnique: vi.fn(),
   },
   taskEvent: {
     create: vi.fn(),
   },
   approvalRequest: {
     findUnique: vi.fn(),
+    findMany: vi.fn(),
     create: vi.fn(),
+    update: vi.fn(),
   },
 }));
 
@@ -110,6 +113,7 @@ describe("DispatchService.dispatch", () => {
     vi.resetAllMocks();
     mockDb.taskEvent.create.mockResolvedValue({});
     mockDb.approvalRequest.findUnique.mockResolvedValue(null);
+    mockDb.approvalRequest.findMany.mockResolvedValue([]);
     mockGateway = {
       isConnected: vi.fn().mockReturnValue(true),
       request: vi.fn(),
@@ -276,6 +280,53 @@ describe("DispatchService.dispatch", () => {
         data: expect.objectContaining({
           message: expect.stringContaining("Awaiting approval"),
         }),
+      })
+    );
+  });
+
+  it("resumes approved approval requests and dispatches blocked task run", async () => {
+    mockDb.approvalRequest.findMany.mockResolvedValue([
+      {
+        id: "approval-1",
+        taskRunId: "run-1",
+      },
+    ]);
+
+    mockDb.taskRun.findUnique.mockResolvedValue({
+      id: "run-1",
+      idempotencyKey: "dispatch:sched-1:2026-01-01T05:00:00.000Z",
+      gatewayRunId: null,
+      task: {
+        id: "task-1",
+        scheduleId: "sched-1",
+        agentId: "agent-1",
+        templateId: "tmpl-1",
+        assembledInstructionsSnapshot: "Draft email content",
+      },
+    });
+
+    mockDb.agent.findUnique.mockResolvedValue({
+      id: "agent-1",
+      routingKey: "agent:exec-assistant:main",
+    });
+
+    mockGateway.request.mockResolvedValue({ runId: "gw-run-1" });
+    mockDb.taskRun.update.mockResolvedValue({});
+    mockDb.taskEvent.create.mockResolvedValue({});
+    mockDb.approvalRequest.update.mockResolvedValue({});
+
+    const service = new DispatchService(mockGateway as any);
+    await service.resumeApprovedRequests();
+
+    expect(mockGateway.request).toHaveBeenCalledWith(
+      "agent",
+      expect.objectContaining({ sessionKey: "agent:exec-assistant:main" }),
+      "dispatch:sched-1:2026-01-01T05:00:00.000Z"
+    );
+    expect(mockDb.approvalRequest.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: "approval-1" },
+        data: expect.objectContaining({ outcome: expect.stringContaining("dispatched") }),
       })
     );
   });

@@ -59,6 +59,69 @@ export type DispatchJobData = {
 export class DispatchService {
   constructor(private gatewayClient?: GatewayClient) {}
 
+  private async dispatchTaskRunToGateway(args: {
+    task: { id: string; scheduleId: string | null; agentId: string | null };
+    taskRun: { id: string; idempotencyKey: string | null };
+    agent: { routingKey: string };
+    assembled: string;
+    templateId: string;
+  }): Promise<{ ok: true; runId: string | null } | { ok: false; errorText: string }> {
+    const { task, taskRun, agent, assembled, templateId } = args;
+
+    if (!this.gatewayClient?.isConnected()) {
+      return { ok: false, errorText: "Gateway not connected" };
+    }
+
+    const idempotencyKey = taskRun.idempotencyKey ?? `taskrun:${taskRun.id}`;
+
+    const requestPayload = {
+      message: assembled,
+      sessionKey: agent.routingKey,
+      idempotencyKey,
+      deliver: false,
+      channel: "webchat",
+      lane: "cron",
+      timeout: 0,
+    };
+
+    try {
+      const response = await this.gatewayClient.request(
+        "agent",
+        requestPayload,
+        idempotencyKey
+      ) as Record<string, unknown>;
+
+      const gatewayRunId = (response?.runId as string) ?? null;
+
+      await db.taskRun.update({
+        where: { id: taskRun.id },
+        data: {
+          wsRequestId: taskRun.id,
+          gatewayRunId,
+          requestPayload: requestPayload as object,
+          responsePayload: response as object,
+          status: TaskRunStatus.ACCEPTED,
+        },
+      });
+
+      await db.taskEvent.create({
+        data: {
+          taskId: task.id,
+          taskRunId: taskRun.id,
+          scheduleId: task.scheduleId,
+          type: "DISPATCHED",
+          message: `Dispatched to agent ${agent.routingKey}`,
+          metadata: { gatewayRunId, templateId },
+        },
+      });
+
+      return { ok: true, runId: gatewayRunId };
+    } catch (err) {
+      const errorText = err instanceof Error ? err.message : String(err);
+      return { ok: false, errorText };
+    }
+  }
+
   async assembleInstructions(
     templateId: string,
     instructionsOverride?: string | null
@@ -244,8 +307,16 @@ export class DispatchService {
       return;
     }
 
-    if (!this.gatewayClient?.isConnected()) {
-      const errorText = "Gateway not connected";
+    const dispatchResult = await this.dispatchTaskRunToGateway({
+      task: { id: task.id, scheduleId: task.scheduleId, agentId: task.agentId },
+      taskRun: { id: taskRun.id, idempotencyKey: taskRun.idempotencyKey ?? idempotencyKey },
+      agent: { routingKey: agent.routingKey },
+      assembled,
+      templateId: schedule.templateId,
+    });
+
+    if (!dispatchResult.ok) {
+      const errorText = dispatchResult.errorText;
       console.error(`[dispatcher] ${errorText} (scheduleId: ${scheduleId}, taskId: ${task.id}, templateId: ${schedule.templateId})`);
       await db.taskRun.update({
         where: { id: taskRun.id },
@@ -267,72 +338,92 @@ export class DispatchService {
       return;
     }
 
-    // OpenClaw Gateway (current) expects to "agent" method params to look like
-    // { message, sessionKey, idempotencyKey, deliver, channel, lane, timeout, ... }
-    // not older { routingKey, instructions } shape.
-    const requestPayload = {
-      message: assembled,
-      sessionKey: agent.routingKey, // e.g. "agent:main:main"
-      idempotencyKey,
-      deliver: false,
-      channel: "webchat",
-      lane: "cron",
-      timeout: 0,
-      // NOTE: OpenClaw's agent params schema is strict (additionalProperties: false)
-      // so we cannot send arbitrary metadata here.
-    };
+    return;
+  }
 
-    try {
-      const response = await this.gatewayClient!.request(
-        "agent",
-        requestPayload,
-        idempotencyKey
-      ) as Record<string, unknown>;
+  async resumeApprovedRequests(limit = 25): Promise<void> {
+    const approvals = await db.approvalRequest.findMany({
+      where: {
+        decision: "APPROVED",
+        taskRunId: { not: null },
+      },
+      orderBy: { decidedAt: "asc" },
+      take: limit,
+    });
 
-      await db.taskRun.update({
-        where: { id: taskRun.id },
-        data: {
-          wsRequestId: taskRun.id,
-          // OpenClaw returns runId (camelCase)
-          gatewayRunId: (response?.runId as string) ?? null,
-          requestPayload: requestPayload as object,
-          responsePayload: response as object,
-          status: TaskRunStatus.ACCEPTED,
+    for (const approval of approvals) {
+      const taskRunId = approval.taskRunId;
+      if (!taskRunId) continue;
+
+      const taskRun = await db.taskRun.findUnique({
+        where: { id: taskRunId },
+        include: {
+          task: true,
         },
       });
 
-      await db.taskEvent.create({
-        data: {
-          taskId: task.id,
-          taskRunId: taskRun.id,
-          scheduleId,
-          type: "DISPATCHED",
-          message: `Dispatched to agent ${agent.routingKey}`,
-          metadata: { gatewayRunId: (response?.runId as string) ?? null, templateId: schedule.templateId },
+      if (!taskRun || !taskRun.task) {
+        await db.approvalRequest.update({
+          where: { id: approval.id },
+          data: { outcome: "task run missing; cannot resume" },
+        });
+        continue;
+      }
+
+      if (taskRun.gatewayRunId) {
+        await db.approvalRequest.update({
+          where: { id: approval.id },
+          data: { outcome: `already dispatched (${taskRun.gatewayRunId})` },
+        });
+        continue;
+      }
+
+      const assembled = taskRun.task.assembledInstructionsSnapshot;
+      const agentId = taskRun.task.agentId;
+      if (!assembled || !agentId) {
+        await db.approvalRequest.update({
+          where: { id: approval.id },
+          data: { outcome: "missing task snapshot or agentId; cannot resume" },
+        });
+        continue;
+      }
+
+      const agent = await db.agent.findUnique({ where: { id: agentId } });
+      if (!agent) {
+        await db.approvalRequest.update({
+          where: { id: approval.id },
+          data: { outcome: "agent missing; cannot resume" },
+        });
+        continue;
+      }
+
+      const dispatchResult = await this.dispatchTaskRunToGateway({
+        task: {
+          id: taskRun.task.id,
+          scheduleId: taskRun.task.scheduleId,
+          agentId: taskRun.task.agentId,
         },
-      });
-    } catch (err) {
-      const errorText = err instanceof Error ? err.message : String(err);
-      console.error(`[dispatcher] Dispatch failed (scheduleId: ${scheduleId}, taskId: ${task.id}, templateId: ${schedule.templateId}, taskRunId: ${taskRun.id}): ${errorText}`);
-      await db.taskRun.update({
-        where: { id: taskRun.id },
-        data: {
-          status: TaskRunStatus.FAILED,
-          errorText,
-          requestPayload,
+        taskRun: {
+          id: taskRun.id,
+          idempotencyKey: taskRun.idempotencyKey,
         },
+        agent: { routingKey: agent.routingKey },
+        assembled,
+        templateId: taskRun.task.templateId ?? "unknown",
       });
-      await db.task.update({
-        where: { id: task.id },
-        data: { status: TaskStatus.FAILED },
-      });
-      await db.taskEvent.create({
+
+      if (!dispatchResult.ok) {
+        await db.approvalRequest.update({
+          where: { id: approval.id },
+          data: { outcome: `resume failed: ${dispatchResult.errorText}` },
+        });
+        continue;
+      }
+
+      await db.approvalRequest.update({
+        where: { id: approval.id },
         data: {
-          taskId: task.id,
-          taskRunId: taskRun.id,
-          type: "FAILED",
-          message: `Dispatch failed: ${errorText}`,
-          metadata: { scheduleId, templateId: schedule.templateId },
+          outcome: `dispatched ${dispatchResult.runId ?? "(no runId)"}`,
         },
       });
     }
