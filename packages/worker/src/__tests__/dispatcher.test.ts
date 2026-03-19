@@ -25,6 +25,10 @@ const mockDb = vi.hoisted(() => ({
   taskEvent: {
     create: vi.fn(),
   },
+  approvalRequest: {
+    findUnique: vi.fn(),
+    create: vi.fn(),
+  },
 }));
 
 vi.mock("@houston/shared", () => ({
@@ -105,6 +109,7 @@ describe("DispatchService.dispatch", () => {
   beforeEach(() => {
     vi.resetAllMocks();
     mockDb.taskEvent.create.mockResolvedValue({});
+    mockDb.approvalRequest.findUnique.mockResolvedValue(null);
     mockGateway = {
       isConnected: vi.fn().mockReturnValue(true),
       request: vi.fn(),
@@ -227,5 +232,51 @@ describe("DispatchService.dispatch", () => {
     // Should NOT create new task or taskRun
     expect(mockDb.task.create).not.toHaveBeenCalled();
     expect(mockGateway.request).not.toHaveBeenCalled();
+  });
+
+  it("auto-creates approval request and blocks dispatch for exec-assistant external-send", async () => {
+    const scheduleId = "sched-approval-1";
+    const dueAt = new Date("2026-01-01T08:00:00Z").toISOString();
+
+    mockDb.schedule.findUnique.mockResolvedValue({
+      id: scheduleId,
+      templateId: "tmpl-approval-1",
+      template: {
+        id: "tmpl-approval-1",
+        name: "Exec Assistant Send",
+        defaultAgentId: "agent-exec",
+        instructions: "Draft and send an email update to client",
+        tags: [],
+        priority: 0,
+      },
+    });
+    mockDb.agent.findUnique.mockResolvedValue({
+      id: "agent-exec",
+      routingKey: "agent:exec-assistant:main",
+    });
+    mockDb.preInstructionsVersion.findFirst.mockResolvedValue(null);
+    mockDb.template.findUnique.mockResolvedValue({
+      id: "tmpl-approval-1",
+      instructions: "Draft and send an email update to client",
+      defaultAgentId: "agent-exec",
+    });
+    mockDb.taskRun.findFirst.mockResolvedValue(null);
+    mockDb.task.create.mockResolvedValue({ id: "task-approval-1", status: "QUEUE", projectId: null });
+    mockDb.taskRun.create.mockResolvedValue({ id: "run-approval-1", idempotencyKey: `dispatch:${scheduleId}:${dueAt}` });
+    mockDb.approvalRequest.create.mockResolvedValue({ id: "approval-1" });
+    mockDb.taskRun.update.mockResolvedValue({ id: "run-approval-1" });
+
+    const service = new DispatchService(mockGateway as any);
+    await service.dispatch({ scheduleId, dueAt });
+
+    expect(mockDb.approvalRequest.create).toHaveBeenCalled();
+    expect(mockGateway.request).not.toHaveBeenCalled();
+    expect(mockDb.taskEvent.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          message: expect.stringContaining("Awaiting approval"),
+        }),
+      })
+    );
   });
 });

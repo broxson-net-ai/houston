@@ -2,6 +2,55 @@ import { db, TaskStatus, TaskRunStatus } from "@houston/shared";
 import { v4 as uuidv4 } from "uuid";
 import { GatewayClient } from "./gateway.js";
 
+type ApprovalTrigger =
+  | "external-send"
+  | "destructive-op"
+  | "production-change"
+  | "service-restart"
+  | "config-change"
+  | "calendar-write"
+  | "contact-write"
+  | "record-write"
+  | "workflow-side-effect";
+
+function deriveRoleFromRoutingKey(routingKey: string): string {
+  const m = String(routingKey || "").match(/^agent:([^:]+):/i);
+  return (m?.[1] || "main").toLowerCase();
+}
+
+function detectApprovalTrigger(role: string, instructions: string): ApprovalTrigger | null {
+  const text = instructions.toLowerCase();
+
+  if (role === "exec-assistant") {
+    if (/\b(send|email|post|publish|webhook|notify|message\s+to)\b/.test(text)) return "external-send";
+    if (/\b(calendar|meeting|event|reschedul|invite)\b/.test(text) && /\b(create|update|delete|move|reschedul)\b/.test(text)) return "calendar-write";
+    if (/\b(contact|address book)\b/.test(text) && /\b(create|update|delete|write)\b/.test(text)) return "contact-write";
+    return null;
+  }
+
+  if (role === "ops-agent") {
+    if (/\b(rm\s+-rf|delete|wipe|reset|truncate|drop table|force push)\b/.test(text)) return "destructive-op";
+    if (/\b(restart|reboot|systemctl\s+restart|pm2\s+restart|docker\s+restart)\b/.test(text)) return "service-restart";
+    if (/\b(config|environment variable|env file|nginx conf|systemd unit)\b/.test(text) && /\b(change|edit|update|write)\b/.test(text)) return "config-change";
+    return null;
+  }
+
+  if (role === "biz-ops-agent") {
+    if (/\b(send|email|post|publish|notify|message\s+to)\b/.test(text)) return "external-send";
+    if (/\b(crm|record|database row|sheet row|entry)\b/.test(text) && /\b(create|update|delete|write|insert)\b/.test(text)) return "record-write";
+    if (/\b(trigger|fire|invoke|run workflow|automate)\b/.test(text)) return "workflow-side-effect";
+    return null;
+  }
+
+  return null;
+}
+
+function triggerSeverity(trigger: ApprovalTrigger): "LOW" | "MEDIUM" | "HIGH" | "CRITICAL" {
+  if (trigger === "destructive-op" || trigger === "production-change") return "CRITICAL";
+  if (trigger === "external-send" || trigger === "service-restart" || trigger === "config-change") return "HIGH";
+  return "MEDIUM";
+}
+
 export type DispatchJobData = {
   scheduleId: string;
   dueAt: string; // ISO string
@@ -85,6 +134,9 @@ export class DispatchService {
       null
     );
 
+    const role = deriveRoleFromRoutingKey(agent.routingKey);
+    const approvalTrigger = detectApprovalTrigger(role, assembled);
+
     // Idempotency key: scheduleId + dueAt
     const idempotencyKey = `dispatch:${scheduleId}:${dueAt}`;
 
@@ -132,6 +184,65 @@ export class DispatchService {
         metadata: { templateId: schedule.templateId },
       },
     });
+
+    if (approvalTrigger) {
+      const requestId = `approval:${taskRun.id}:${approvalTrigger}`;
+      const existingApproval = await db.approvalRequest.findUnique({ where: { requestId } });
+      const approval = existingApproval
+        ? existingApproval
+        : await db.approvalRequest.create({
+            data: {
+              requestId,
+              role,
+              trigger: approvalTrigger,
+              severity: triggerSeverity(approvalTrigger),
+              intent: `Approval required before dispatching task ${task.id}`,
+              target: agent.routingKey,
+              risk: `Task instructions matched trigger '${approvalTrigger}' for role '${role}'.`,
+              rollback: "Do not dispatch task until approved.",
+              budget: {
+                toolCallsUsed: 0,
+                runtimeMinutes: 0,
+                previousApprovalsThisTask: 0,
+              },
+              context: {
+                taskId: task.id,
+                projectId: task.projectId,
+                sessionId: agent.routingKey,
+              },
+              taskRunId: taskRun.id,
+            },
+          });
+
+      await db.taskEvent.create({
+        data: {
+          taskId: task.id,
+          taskRunId: taskRun.id,
+          scheduleId,
+          type: "QUEUED",
+          message: `Awaiting approval (${approvalTrigger}) before dispatch`,
+          metadata: {
+            approvalRequestId: approval.id,
+            trigger: approvalTrigger,
+            role,
+            templateId: schedule.templateId,
+          },
+        },
+      });
+
+      await db.taskRun.update({
+        where: { id: taskRun.id },
+        data: {
+          responsePayload: {
+            approvalPending: true,
+            approvalRequestId: approval.id,
+            trigger: approvalTrigger,
+          },
+        },
+      });
+
+      return;
+    }
 
     if (!this.gatewayClient?.isConnected()) {
       const errorText = "Gateway not connected";
