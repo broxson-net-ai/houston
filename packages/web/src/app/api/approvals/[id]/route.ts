@@ -31,11 +31,32 @@ export async function PATCH(
   }
 
   const body = await req.json();
-  const { decision, decider, reason, outcome } = body;
+  const { decision, decider, reason, outcome, revision } = body;
 
   if (!["APPROVED", "DENIED", "REVISED"].includes(decision)) {
     return NextResponse.json({ error: "Invalid decision" }, { status: 400 });
   }
+
+  if (decision === "REVISED" && (!revision || typeof revision !== "string" || !revision.trim())) {
+    return NextResponse.json({ error: "revision is required for REVISED decisions" }, { status: 400 });
+  }
+
+  const existingContext =
+    request.context && typeof request.context === "object" && !Array.isArray(request.context)
+      ? (request.context as Record<string, unknown>)
+      : {};
+
+  const nextContext: Record<string, unknown> = { ...existingContext };
+  if (decision === "REVISED" && typeof revision === "string") {
+    nextContext.revision = revision;
+  }
+
+  const defaultOutcome =
+    decision === "DENIED"
+      ? "blocked: denied by reviewer"
+      : decision === "REVISED"
+        ? "revision captured; pending redispatch"
+        : null;
 
   const updated = await db.approvalRequest.update({
     where: { id },
@@ -43,7 +64,8 @@ export async function PATCH(
       decision,
       decider: decider || "admin",
       reason: reason || null,
-      outcome: outcome || null,
+      outcome: outcome || defaultOutcome,
+      context: nextContext as any,
       decidedAt: new Date(),
     },
   });

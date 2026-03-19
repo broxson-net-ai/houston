@@ -330,4 +330,100 @@ describe("DispatchService.dispatch", () => {
       })
     );
   });
+
+  it("marks task as BLOCKED semantics when approval is denied", async () => {
+    mockDb.approvalRequest.findMany.mockResolvedValue([
+      {
+        id: "approval-denied-1",
+        taskRunId: "run-denied-1",
+        decision: "DENIED",
+        reason: "Denied by reviewer",
+      },
+    ]);
+
+    mockDb.taskRun.findUnique.mockResolvedValue({
+      id: "run-denied-1",
+      gatewayRunId: null,
+      task: {
+        id: "task-denied-1",
+        scheduleId: "sched-denied-1",
+        agentId: "agent-1",
+        templateId: "tmpl-1",
+        assembledInstructionsSnapshot: "Send email",
+      },
+    });
+
+    const service = new DispatchService(mockGateway as any);
+    await service.resumeApprovedRequests();
+
+    expect(mockGateway.request).not.toHaveBeenCalled();
+    expect(mockDb.taskRun.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: "run-denied-1" },
+        data: expect.objectContaining({ status: "FAILED", errorText: expect.stringContaining("BLOCKED") }),
+      })
+    );
+    expect(mockDb.task.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: "task-denied-1" },
+        data: expect.objectContaining({ status: "FAILED" }),
+      })
+    );
+    expect(mockDb.approvalRequest.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: "approval-denied-1" },
+        data: expect.objectContaining({ outcome: expect.stringContaining("blocked") }),
+      })
+    );
+  });
+
+  it("redispatches automatically when approval is revised", async () => {
+    mockDb.approvalRequest.findMany.mockResolvedValue([
+      {
+        id: "approval-revised-1",
+        taskRunId: "run-revised-1",
+        decision: "REVISED",
+        context: { revision: "Use concise wording and remove external recipients." },
+      },
+    ]);
+
+    mockDb.taskRun.findUnique.mockResolvedValue({
+      id: "run-revised-1",
+      idempotencyKey: "dispatch:sched-rev:2026-01-01T09:00:00.000Z",
+      gatewayRunId: null,
+      task: {
+        id: "task-revised-1",
+        scheduleId: "sched-rev-1",
+        agentId: "agent-1",
+        templateId: "tmpl-1",
+        assembledInstructionsSnapshot: "Draft and send a client update",
+      },
+    });
+
+    mockDb.agent.findUnique.mockResolvedValue({
+      id: "agent-1",
+      routingKey: "agent:exec-assistant:main",
+    });
+    mockGateway.request.mockResolvedValue({ runId: "gw-run-revised-1" });
+
+    const service = new DispatchService(mockGateway as any);
+    await service.resumeApprovedRequests();
+
+    expect(mockDb.task.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: "task-revised-1" },
+        data: expect.objectContaining({
+          instructionsOverride: "Use concise wording and remove external recipients.",
+          assembledInstructionsSnapshot: expect.stringContaining("=== REVISION ==="),
+        }),
+      })
+    );
+    expect(mockGateway.request).toHaveBeenCalled();
+    expect(mockDb.approvalRequest.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: "approval-revised-1" },
+        data: expect.objectContaining({ outcome: expect.stringContaining("redispatched") }),
+      })
+    );
+  });
 });

@@ -34,9 +34,10 @@ type ApprovalRequest = {
 
 export default function ApprovalsPage() {
   const [requests, setRequests] = useState<ApprovalRequest[]>([]);
-  const [filter, setFilter] = useState<"PENDING" | "APPROVED" | "DENIED" | "ALL">("PENDING");
+  const [filter, setFilter] = useState<"PENDING" | "APPROVED" | "DENIED" | "REVISED" | "ALL">("PENDING");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [actionReason, setActionReason] = useState("");
+  const [revisionText, setRevisionText] = useState("");
   const [error, setError] = useState("");
 
   async function loadRequests() {
@@ -48,14 +49,20 @@ export default function ApprovalsPage() {
     loadRequests();
   }, [filter]);
 
-  async function handleDecision(id: string, decision: "APPROVED" | "DENIED") {
+  async function handleDecision(id: string, decision: "APPROVED" | "DENIED" | "REVISED") {
     setError("");
+    if (decision === "REVISED" && !revisionText.trim()) {
+      setError("Revision text is required for REVISED.");
+      return;
+    }
+
     const res = await fetch(`/api/approvals/${id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         decision,
         reason: actionReason || undefined,
+        revision: decision === "REVISED" ? revisionText : undefined,
       }),
     });
     if (!res.ok) {
@@ -65,6 +72,7 @@ export default function ApprovalsPage() {
     }
     setSelectedId(null);
     setActionReason("");
+    setRevisionText("");
     loadRequests();
   }
 
@@ -89,7 +97,7 @@ export default function ApprovalsPage() {
         <div className="flex items-center justify-between">
           <h1 className="text-2xl font-bold">Approvals</h1>
           <div className="flex gap-2">
-            {(["PENDING", "APPROVED", "DENIED", "ALL"] as const).map((f) => (
+            {(["PENDING", "APPROVED", "DENIED", "REVISED", "ALL"] as const).map((f) => (
               <button
                 key={f}
                 onClick={() => setFilter(f)}
@@ -112,6 +120,7 @@ export default function ApprovalsPage() {
                 <th className="text-left p-3 font-medium">Trigger</th>
                 <th className="text-left p-3 font-medium">Intent</th>
                 <th className="text-left p-3 font-medium">Status</th>
+                <th className="text-left p-3 font-medium">Outcome</th>
                 <th className="text-left p-3 font-medium">Created</th>
                 <th className="text-left p-3 font-medium">Actions</th>
               </tr>
@@ -132,6 +141,7 @@ export default function ApprovalsPage() {
                       {req.decision}
                     </span>
                   </td>
+                  <td className="p-3 max-w-xs truncate text-xs text-muted-foreground">{req.outcome || "-"}</td>
                   <td className="p-3 text-xs text-muted-foreground">
                     {new Date(req.createdAt).toLocaleString()}
                   </td>
@@ -157,6 +167,12 @@ export default function ApprovalsPage() {
                           >
                             Deny
                           </button>
+                          <button
+                            onClick={() => handleDecision(req.id, "REVISED")}
+                            className="text-purple-600 hover:text-purple-800 text-xs"
+                          >
+                            Revise
+                          </button>
                         </>
                       )}
                     </div>
@@ -165,7 +181,7 @@ export default function ApprovalsPage() {
               ))}
               {requests.length === 0 && (
                 <tr>
-                  <td colSpan={7} className="p-6 text-center text-muted-foreground">
+                  <td colSpan={8} className="p-6 text-center text-muted-foreground">
                     No approval requests
                   </td>
                 </tr>
@@ -228,6 +244,31 @@ export default function ApprovalsPage() {
                           <span className="font-medium">Reason:</span> {req.reason}
                         </div>
                       )}
+                      {req.outcome && (
+                        <div>
+                          <span className="font-medium">Outcome:</span> {req.outcome}
+                        </div>
+                      )}
+                      {req.context?.taskId && (
+                        <div>
+                          <span className="font-medium">Task ID:</span> <span className="font-mono text-xs">{req.context.taskId}</span>
+                        </div>
+                      )}
+                      {req.taskRunId && (
+                        <div>
+                          <span className="font-medium">Task Run ID:</span> <span className="font-mono text-xs">{req.taskRunId}</span>
+                        </div>
+                      )}
+                      {req.context?.projectId && (
+                        <div>
+                          <span className="font-medium">Project ID:</span> <span className="font-mono text-xs">{req.context.projectId}</span>
+                        </div>
+                      )}
+                      {req.decidedAt && (
+                        <div>
+                          <span className="font-medium">Decided:</span> {new Date(req.decidedAt).toLocaleString()}
+                        </div>
+                      )}
                     </div>
                     {error && <p className="text-sm text-destructive">{error}</p>}
                     <div className="flex justify-end gap-2 pt-2">
@@ -235,6 +276,7 @@ export default function ApprovalsPage() {
                         onClick={() => {
                           setSelectedId(null);
                           setActionReason("");
+                          setRevisionText("");
                           setError("");
                         }}
                         className="px-3 py-1.5 text-sm border rounded-md"
@@ -250,6 +292,13 @@ export default function ApprovalsPage() {
                             onChange={(e) => setActionReason(e.target.value)}
                             className="px-3 py-1.5 text-sm border rounded-md flex-1"
                           />
+                          <input
+                            type="text"
+                            placeholder="Revision text (required for Revise)"
+                            value={revisionText}
+                            onChange={(e) => setRevisionText(e.target.value)}
+                            className="px-3 py-1.5 text-sm border rounded-md flex-1"
+                          />
                           <button
                             onClick={() => handleDecision(req.id, "APPROVED")}
                             className="px-3 py-1.5 text-sm bg-green-600 text-white rounded-md hover:opacity-90"
@@ -261,6 +310,12 @@ export default function ApprovalsPage() {
                             className="px-3 py-1.5 text-sm bg-red-600 text-white rounded-md hover:opacity-90"
                           >
                             Deny
+                          </button>
+                          <button
+                            onClick={() => handleDecision(req.id, "REVISED")}
+                            className="px-3 py-1.5 text-sm bg-purple-600 text-white rounded-md hover:opacity-90"
+                          >
+                            Revise
                           </button>
                         </>
                       )}

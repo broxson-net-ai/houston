@@ -344,8 +344,13 @@ export class DispatchService {
   async resumeApprovedRequests(limit = 25): Promise<void> {
     const approvals = await db.approvalRequest.findMany({
       where: {
-        decision: "APPROVED",
+        decision: { in: ["APPROVED", "DENIED", "REVISED"] },
         taskRunId: { not: null },
+        OR: [
+          { outcome: null },
+          { outcome: { startsWith: "resume failed:" } },
+          { outcome: { startsWith: "revision captured;" } },
+        ],
       },
       orderBy: { decidedAt: "asc" },
       take: limit,
@@ -370,6 +375,54 @@ export class DispatchService {
         continue;
       }
 
+      const decision = approval.decision;
+
+      if (decision === "DENIED") {
+        const reasonText = approval.reason?.trim() || "denied by reviewer";
+        await db.taskRun.update({
+          where: { id: taskRun.id },
+          data: {
+            status: TaskRunStatus.FAILED,
+            finishedAt: new Date(),
+            errorText: `BLOCKED: ${reasonText}`,
+            responsePayload: {
+              approvalBlocked: true,
+              approvalRequestId: approval.id,
+              reason: reasonText,
+            },
+          },
+        });
+
+        await db.task.update({
+          where: { id: taskRun.task.id },
+          data: {
+            status: TaskStatus.FAILED,
+          },
+        });
+
+        await db.taskEvent.create({
+          data: {
+            taskId: taskRun.task.id,
+            taskRunId: taskRun.id,
+            scheduleId: taskRun.task.scheduleId,
+            type: "STATUS_CHANGED",
+            message: `Task blocked by approval denial: ${reasonText}`,
+            metadata: {
+              semanticStatus: "BLOCKED",
+              approvalRequestId: approval.id,
+              decision,
+              reason: reasonText,
+            },
+          },
+        });
+
+        await db.approvalRequest.update({
+          where: { id: approval.id },
+          data: { outcome: `blocked: ${reasonText}` },
+        });
+        continue;
+      }
+
       if (taskRun.gatewayRunId) {
         await db.approvalRequest.update({
           where: { id: approval.id },
@@ -378,8 +431,51 @@ export class DispatchService {
         continue;
       }
 
-      const assembled = taskRun.task.assembledInstructionsSnapshot;
+      let assembled = taskRun.task.assembledInstructionsSnapshot;
       const agentId = taskRun.task.agentId;
+
+      if (decision === "REVISED") {
+        const context =
+          approval.context && typeof approval.context === "object" && !Array.isArray(approval.context)
+            ? (approval.context as Record<string, unknown>)
+            : {};
+        const revision = typeof context.revision === "string" ? context.revision.trim() : "";
+        if (!revision) {
+          await db.approvalRequest.update({
+            where: { id: approval.id },
+            data: { outcome: "revision missing; cannot redispatch" },
+          });
+          continue;
+        }
+
+        const baseText = assembled || "";
+        assembled = `${baseText}\n\n=== REVISION ===\n${revision}`.trim();
+
+        await db.task.update({
+          where: { id: taskRun.task.id },
+          data: {
+            instructionsOverride: revision,
+            assembledInstructionsSnapshot: assembled,
+          },
+        });
+
+        await db.taskEvent.create({
+          data: {
+            taskId: taskRun.task.id,
+            taskRunId: taskRun.id,
+            scheduleId: taskRun.task.scheduleId,
+            type: "STATUS_CHANGED",
+            message: "Approval revised; redispatching with revision",
+            metadata: {
+              semanticStatus: "REVISED",
+              approvalRequestId: approval.id,
+              decision,
+              revision,
+            },
+          },
+        });
+      }
+
       if (!assembled || !agentId) {
         await db.approvalRequest.update({
           where: { id: approval.id },
@@ -423,7 +519,10 @@ export class DispatchService {
       await db.approvalRequest.update({
         where: { id: approval.id },
         data: {
-          outcome: `dispatched ${dispatchResult.runId ?? "(no runId)"}`,
+          outcome:
+            decision === "REVISED"
+              ? `redispatched with revision ${dispatchResult.runId ?? "(no runId)"}`
+              : `dispatched ${dispatchResult.runId ?? "(no runId)"}`,
         },
       });
     }
