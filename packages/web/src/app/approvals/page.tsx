@@ -90,6 +90,32 @@ export default function ApprovalsPage() {
     REVISED: "bg-purple-100 text-purple-800",
   };
 
+  function outcomeBadge(outcome: string | null) {
+    const value = (outcome || "").toLowerCase();
+    if (value.startsWith("blocked:")) {
+      return { label: "Blocked", cls: "bg-red-100 text-red-800" };
+    }
+    if (value.includes("redispatched")) {
+      return { label: "Redispatched", cls: "bg-purple-100 text-purple-800" };
+    }
+    if (value.startsWith("dispatched") || value.startsWith("already dispatched")) {
+      return { label: "Dispatched", cls: "bg-green-100 text-green-800" };
+    }
+    if (value.startsWith("pending blocked apply")) {
+      return { label: "Pending Block", cls: "bg-amber-100 text-amber-800" };
+    }
+    if (value.startsWith("revision captured")) {
+      return { label: "Pending Revision", cls: "bg-blue-100 text-blue-800" };
+    }
+    if (value.startsWith("resume failed:")) {
+      return { label: "Resume Failed", cls: "bg-red-100 text-red-800" };
+    }
+    if (!value) {
+      return { label: "-", cls: "bg-gray-100 text-gray-700" };
+    }
+    return { label: "Other", cls: "bg-gray-100 text-gray-700" };
+  }
+
   return (
     <div className="min-h-screen bg-background">
       <Nav />
@@ -141,7 +167,21 @@ export default function ApprovalsPage() {
                       {req.decision}
                     </span>
                   </td>
-                  <td className="p-3 max-w-xs truncate text-xs text-muted-foreground">{req.outcome || "-"}</td>
+                  <td className="p-3">
+                    {(() => {
+                      const badge = outcomeBadge(req.outcome);
+                      return (
+                        <div className="space-y-1">
+                          <span className={`text-xs px-2 py-0.5 rounded-full ${badge.cls}`}>{badge.label}</span>
+                          {req.outcome && (
+                            <div className="max-w-xs truncate text-xs text-muted-foreground" title={req.outcome}>
+                              {req.outcome}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })()}
+                  </td>
                   <td className="p-3 text-xs text-muted-foreground">
                     {new Date(req.createdAt).toLocaleString()}
                   </td>
