@@ -2,6 +2,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@houston/shared";
 import { requireAuth } from "@/lib/session";
 
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+
 export async function GET(req: NextRequest) {
   const authError = await requireAuth();
   if (authError) return authError;
