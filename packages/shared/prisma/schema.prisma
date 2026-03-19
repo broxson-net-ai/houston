@@ -222,3 +222,40 @@ model SystemStatus {
 
   @@map("system_status")
 }
+
+enum ApprovalSeverity {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum ApprovalDecision {
+  PENDING
+  APPROVED
+  DENIED
+  REVISED
+}
+
+model ApprovalRequest {
+  id           String           @id @default(cuid())
+  requestId    String           @unique
+  role         String
+  trigger      String
+  severity     ApprovalSeverity @default(MEDIUM)
+  intent       String
+  target       String
+  risk         String
+  rollback     String
+  budget       Json?
+  context      Json?
+  decision     ApprovalDecision @default(PENDING)
+  decider      String?
+  reason       String?
+  outcome      String?
+  createdAt    DateTime         @default(now())
+  decidedAt    DateTime?
+  taskRunId    String?
+
+  @@map("approval_requests")
+}
