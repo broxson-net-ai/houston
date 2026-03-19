@@ -12,6 +12,9 @@ export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
   const decision = searchParams.get("decision") || "PENDING";
   const severity = searchParams.get("severity");
+  const trust = searchParams.get("trust") || "ALL";
+  const includeSummary = searchParams.get("includeSummary") === "1";
+  const windowHours = Math.max(1, Number(searchParams.get("windowHours") || "48"));
 
   const where: Record<string, unknown> = {};
   if (decision !== "ALL") {
@@ -20,6 +23,11 @@ export async function GET(req: NextRequest) {
   if (severity) {
     where.severity = severity;
   }
+  if (trust === "AUTO_ONLY") {
+    where.decider = "policy:trust-ladder";
+  } else if (trust === "MANUAL_ONLY") {
+    where.NOT = { decider: "policy:trust-ladder" };
+  }
 
   const requests = await db.approvalRequest.findMany({
     where,
@@ -27,7 +35,96 @@ export async function GET(req: NextRequest) {
     take: 100,
   });
 
-  return NextResponse.json(requests);
+  if (!includeSummary) {
+    return NextResponse.json(requests);
+  }
+
+  const since = new Date(Date.now() - windowHours * 60 * 60 * 1000);
+  const recent = await db.approvalRequest.findMany({
+    where: {
+      createdAt: { gte: since },
+    },
+    select: {
+      trigger: true,
+      decision: true,
+      decider: true,
+    },
+    orderBy: { createdAt: "desc" },
+    take: 1000,
+  });
+
+  const totals = {
+    total: recent.length,
+    pending: 0,
+    denied: 0,
+    revised: 0,
+    autoApproved: 0,
+    manualApproved: 0,
+  };
+
+  const byTrigger = new Map<string, {
+    total: number;
+    pending: number;
+    denied: number;
+    revised: number;
+    autoApproved: number;
+    manualApproved: number;
+  }>();
+
+  for (const item of recent) {
+    const trigger = item.trigger || "unknown";
+    if (!byTrigger.has(trigger)) {
+      byTrigger.set(trigger, {
+        total: 0,
+        pending: 0,
+        denied: 0,
+        revised: 0,
+        autoApproved: 0,
+        manualApproved: 0,
+      });
+    }
+
+    const bucket = byTrigger.get(trigger)!;
+    bucket.total += 1;
+
+    if (item.decision === "PENDING") {
+      bucket.pending += 1;
+      totals.pending += 1;
+      continue;
+    }
+    if (item.decision === "DENIED") {
+      bucket.denied += 1;
+      totals.denied += 1;
+      continue;
+    }
+    if (item.decision === "REVISED") {
+      bucket.revised += 1;
+      totals.revised += 1;
+      continue;
+    }
+    if (item.decision === "APPROVED") {
+      if (item.decider === "policy:trust-ladder") {
+        bucket.autoApproved += 1;
+        totals.autoApproved += 1;
+      } else {
+        bucket.manualApproved += 1;
+        totals.manualApproved += 1;
+      }
+    }
+  }
+
+  const triggerSummary = Array.from(byTrigger.entries())
+    .map(([trigger, bucket]) => ({ trigger, ...bucket }))
+    .sort((a, b) => b.total - a.total);
+
+  return NextResponse.json({
+    requests,
+    summary: {
+      windowHours,
+      ...totals,
+      byTrigger: triggerSummary,
+    },
+  });
 }
 
 export async function POST(req: NextRequest) {

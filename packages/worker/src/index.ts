@@ -10,6 +10,23 @@ import { db } from "@houston/shared";
 const SKILLS_PATH = process.env.OPENCLAW_SKILLS_PATH ?? "";
 const SKILLS_SCAN_INTERVAL_MS = 60_000;
 const APPROVAL_RESUME_INTERVAL_MS = Number(process.env.APPROVAL_RESUME_INTERVAL_MS ?? "10000");
+const TRUST_VERIFY_INTERVAL_MS = Number(process.env.HOUSTON_TRUST_VERIFY_INTERVAL_MS ?? "3600000");
+const TRUST_VERIFY_WINDOW_HOURS = Number(process.env.HOUSTON_TRUST_VERIFY_WINDOW_HOURS ?? "48");
+
+function parseTrustModes(): Record<string, string> {
+  const raw = process.env.HOUSTON_APPROVAL_TRUST_MODES;
+  if (!raw) return {};
+  try {
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    const out: Record<string, string> = {};
+    for (const [k, v] of Object.entries(parsed)) {
+      if (typeof v === "string") out[k] = v;
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
 
 async function main() {
   console.log("[worker] Houston worker started");
@@ -79,6 +96,90 @@ async function main() {
   // Dispatcher
   const dispatchService = new DispatchService(gatewayClient);
   let approvalResumeTimer: ReturnType<typeof setInterval> | null = null;
+  let trustVerifyTimer: ReturnType<typeof setInterval> | null = null;
+
+  const runTrustVerification = async () => {
+    const now = Date.now();
+    const since = new Date(now - Math.max(1, TRUST_VERIFY_WINDOW_HOURS) * 60 * 60 * 1000);
+    const rows = await db.approvalRequest.findMany({
+      where: { createdAt: { gte: since } },
+      select: {
+        trigger: true,
+        decision: true,
+        decider: true,
+        createdAt: true,
+      },
+      orderBy: { createdAt: "desc" },
+      take: 2000,
+    });
+
+    const byTrigger = new Map<string, { total: number; autoApproved: number; manualApproved: number; pending: number; denied: number; revised: number }>();
+    let autoApproved = 0;
+    let manualApproved = 0;
+    let pending = 0;
+    let denied = 0;
+    let revised = 0;
+
+    for (const row of rows) {
+      const trigger = row.trigger || "unknown";
+      if (!byTrigger.has(trigger)) {
+        byTrigger.set(trigger, { total: 0, autoApproved: 0, manualApproved: 0, pending: 0, denied: 0, revised: 0 });
+      }
+      const bucket = byTrigger.get(trigger)!;
+      bucket.total += 1;
+
+      if (row.decision === "APPROVED") {
+        if (row.decider === "policy:trust-ladder") {
+          autoApproved += 1;
+          bucket.autoApproved += 1;
+        } else {
+          manualApproved += 1;
+          bucket.manualApproved += 1;
+        }
+      } else if (row.decision === "PENDING") {
+        pending += 1;
+        bucket.pending += 1;
+      } else if (row.decision === "DENIED") {
+        denied += 1;
+        bucket.denied += 1;
+      } else if (row.decision === "REVISED") {
+        revised += 1;
+        bucket.revised += 1;
+      }
+    }
+
+    const flaggedCriticalAuto = Array.from(byTrigger.entries())
+      .filter(([trigger, bucket]) => ["destructive-op", "production-change", "service-restart", "config-change"].includes(trigger) && bucket.autoApproved > 0)
+      .map(([trigger, bucket]) => ({ trigger, autoApproved: bucket.autoApproved }));
+
+    const verification = {
+      checkedAt: new Date(now).toISOString(),
+      windowHours: Math.max(1, TRUST_VERIFY_WINDOW_HOURS),
+      trustDefault: process.env.HOUSTON_APPROVAL_TRUST_DEFAULT ?? "always",
+      trustModes: parseTrustModes(),
+      total: rows.length,
+      autoApproved,
+      manualApproved,
+      pending,
+      denied,
+      revised,
+      flaggedCriticalAuto,
+      byTrigger: Array.from(byTrigger.entries()).map(([trigger, bucket]) => ({ trigger, ...bucket })),
+    };
+
+    await db.systemStatus.upsert({
+      where: { key: "trust_ladder_verification" },
+      create: { key: "trust_ladder_verification", value: verification },
+      update: { value: verification },
+    });
+
+    if (flaggedCriticalAuto.length > 0) {
+      console.warn(`[worker] Trust verification warning: critical auto approvals detected (${JSON.stringify(flaggedCriticalAuto)})`);
+    } else {
+      console.log(`[worker] Trust verification ok: auto=${autoApproved} manual=${manualApproved} pending=${pending} denied=${denied} revised=${revised}`);
+    }
+  };
+
   if (gatewayClient) {
     approvalResumeTimer = setInterval(() => {
       dispatchService.resumeApprovedRequests().catch((err) => {
@@ -86,6 +187,18 @@ async function main() {
         console.error(`[worker] Failed to resume approved requests: ${errorText}`);
       });
     }, APPROVAL_RESUME_INTERVAL_MS);
+
+    runTrustVerification().catch((err) => {
+      const errorText = err instanceof Error ? err.message : String(err);
+      console.error(`[worker] Initial trust verification failed: ${errorText}`);
+    });
+
+    trustVerifyTimer = setInterval(() => {
+      runTrustVerification().catch((err) => {
+        const errorText = err instanceof Error ? err.message : String(err);
+        console.error(`[worker] Trust verification failed: ${errorText}`);
+      });
+    }, TRUST_VERIFY_INTERVAL_MS);
   }
 
   // Event handler
@@ -158,6 +271,11 @@ async function main() {
     if (approvalResumeTimer) {
       clearInterval(approvalResumeTimer);
       console.log("[worker] Approval resume timer stopped");
+    }
+
+    if (trustVerifyTimer) {
+      clearInterval(trustVerifyTimer);
+      console.log("[worker] Trust verification timer stopped");
     }
 
     if (gatewayClient) {

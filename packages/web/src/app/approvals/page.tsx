@@ -22,6 +22,9 @@ type ApprovalRequest = {
     taskId?: string;
     projectId?: string;
     sessionId?: string;
+    trustMode?: string;
+    approvalPattern?: string;
+    intentSignature?: string;
   } | null;
   decision: "PENDING" | "APPROVED" | "DENIED" | "REVISED";
   decider: string | null;
@@ -32,22 +35,45 @@ type ApprovalRequest = {
   taskRunId: string | null;
 };
 
+type ApprovalSummary = {
+  windowHours: number;
+  total: number;
+  pending: number;
+  denied: number;
+  revised: number;
+  autoApproved: number;
+  manualApproved: number;
+  byTrigger: Array<{
+    trigger: string;
+    total: number;
+    pending: number;
+    denied: number;
+    revised: number;
+    autoApproved: number;
+    manualApproved: number;
+  }>;
+};
+
 export default function ApprovalsPage() {
   const [requests, setRequests] = useState<ApprovalRequest[]>([]);
   const [filter, setFilter] = useState<"PENDING" | "APPROVED" | "DENIED" | "REVISED" | "ALL">("PENDING");
+  const [trustFilter, setTrustFilter] = useState<"ALL" | "AUTO_ONLY" | "MANUAL_ONLY">("ALL");
+  const [summary, setSummary] = useState<ApprovalSummary | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [actionReason, setActionReason] = useState("");
   const [revisionText, setRevisionText] = useState("");
   const [error, setError] = useState("");
 
   async function loadRequests() {
-    const res = await fetch(`/api/approvals?decision=${filter}`);
-    setRequests(await res.json());
+    const res = await fetch(`/api/approvals?decision=${filter}&trust=${trustFilter}&includeSummary=1&windowHours=48`);
+    const data = await res.json();
+    setRequests(data.requests ?? []);
+    setSummary(data.summary ?? null);
   }
 
   useEffect(() => {
     loadRequests();
-  }, [filter]);
+  }, [filter, trustFilter]);
 
   async function handleDecision(id: string, decision: "APPROVED" | "DENIED" | "REVISED") {
     setError("");
@@ -122,20 +148,104 @@ export default function ApprovalsPage() {
       <div className="container mx-auto px-4 py-6 space-y-4">
         <div className="flex items-center justify-between">
           <h1 className="text-2xl font-bold">Approvals</h1>
-          <div className="flex gap-2">
-            {(["PENDING", "APPROVED", "DENIED", "REVISED", "ALL"] as const).map((f) => (
-              <button
-                key={f}
-                onClick={() => setFilter(f)}
-                className={`px-3 py-1.5 text-sm rounded-md font-medium ${
-                  filter === f ? "bg-primary text-primary-foreground" : "border"
-                }`}
-              >
-                {f}
-              </button>
-            ))}
+          <div className="flex flex-col items-end gap-2">
+            <div className="flex gap-2">
+              {(["PENDING", "APPROVED", "DENIED", "REVISED", "ALL"] as const).map((f) => (
+                <button
+                  key={f}
+                  onClick={() => setFilter(f)}
+                  className={`px-3 py-1.5 text-sm rounded-md font-medium ${
+                    filter === f ? "bg-primary text-primary-foreground" : "border"
+                  }`}
+                >
+                  {f}
+                </button>
+              ))}
+            </div>
+            <div className="flex gap-2">
+              {([
+                { id: "ALL", label: "All Decisions" },
+                { id: "AUTO_ONLY", label: "Auto Approved" },
+                { id: "MANUAL_ONLY", label: "Manual/Non-auto" },
+              ] as const).map((opt) => (
+                <button
+                  key={opt.id}
+                  onClick={() => setTrustFilter(opt.id)}
+                  className={`px-3 py-1.5 text-xs rounded-md font-medium ${
+                    trustFilter === opt.id ? "bg-slate-800 text-white" : "border"
+                  }`}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
           </div>
         </div>
+
+        {summary && (
+          <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-2">
+            <div className="border rounded-lg p-3">
+              <div className="text-xs text-muted-foreground">Window</div>
+              <div className="font-semibold">{summary.windowHours}h</div>
+            </div>
+            <div className="border rounded-lg p-3">
+              <div className="text-xs text-muted-foreground">Total</div>
+              <div className="font-semibold">{summary.total}</div>
+            </div>
+            <div className="border rounded-lg p-3">
+              <div className="text-xs text-muted-foreground">Pending</div>
+              <div className="font-semibold">{summary.pending}</div>
+            </div>
+            <div className="border rounded-lg p-3">
+              <div className="text-xs text-muted-foreground">Manual Approved</div>
+              <div className="font-semibold text-green-700">{summary.manualApproved}</div>
+            </div>
+            <div className="border rounded-lg p-3">
+              <div className="text-xs text-muted-foreground">Auto Approved</div>
+              <div className="font-semibold text-indigo-700">{summary.autoApproved}</div>
+            </div>
+            <div className="border rounded-lg p-3">
+              <div className="text-xs text-muted-foreground">Denied</div>
+              <div className="font-semibold text-red-700">{summary.denied}</div>
+            </div>
+            <div className="border rounded-lg p-3">
+              <div className="text-xs text-muted-foreground">Revised</div>
+              <div className="font-semibold text-purple-700">{summary.revised}</div>
+            </div>
+          </div>
+        )}
+
+        {summary && summary.byTrigger.length > 0 && (
+          <div className="border rounded-lg overflow-hidden">
+            <div className="px-3 py-2 border-b bg-muted text-xs font-medium">Trigger Trust Breakdown (last {summary.windowHours}h)</div>
+            <table className="w-full text-xs">
+              <thead className="bg-muted/60">
+                <tr>
+                  <th className="text-left p-2 font-medium">Trigger</th>
+                  <th className="text-left p-2 font-medium">Total</th>
+                  <th className="text-left p-2 font-medium">Manual</th>
+                  <th className="text-left p-2 font-medium">Auto</th>
+                  <th className="text-left p-2 font-medium">Pending</th>
+                  <th className="text-left p-2 font-medium">Denied</th>
+                  <th className="text-left p-2 font-medium">Revised</th>
+                </tr>
+              </thead>
+              <tbody>
+                {summary.byTrigger.slice(0, 12).map((row) => (
+                  <tr key={row.trigger} className="border-t">
+                    <td className="p-2 font-mono">{row.trigger}</td>
+                    <td className="p-2">{row.total}</td>
+                    <td className="p-2">{row.manualApproved}</td>
+                    <td className="p-2">{row.autoApproved}</td>
+                    <td className="p-2">{row.pending}</td>
+                    <td className="p-2">{row.denied}</td>
+                    <td className="p-2">{row.revised}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
 
         <div className="border rounded-lg overflow-hidden">
           <table className="w-full text-sm">
