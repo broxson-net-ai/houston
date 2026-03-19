@@ -28,3 +28,6 @@ Thumbs.db
 coverage/
 playwright-report/
 test-results/
+
+# Next.js generated types
+packages/web/next-env.d.ts

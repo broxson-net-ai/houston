@@ -102,9 +102,44 @@ function resolveTrustMode(role: string, trigger: ApprovalTrigger): TrustMode {
   return trustModeConfig.default ?? trustModeDefault;
 }
 
+function extractApprovalIntentText(assembled: string): string {
+  const sectionContent = new Map<string, string[]>();
+  let currentSection = "BODY";
+  sectionContent.set(currentSection, []);
+
+  for (const line of assembled.split(/\r?\n/)) {
+    const marker = line.match(/^===\s+(.+?)\s+===$/);
+    if (marker) {
+      currentSection = marker[1].trim().toUpperCase();
+      if (!sectionContent.has(currentSection)) sectionContent.set(currentSection, []);
+      continue;
+    }
+    sectionContent.get(currentSection)?.push(line);
+  }
+
+  const selected = ["TASK INSTRUCTIONS", "OVERRIDE", "REVISION"]
+    .map((key) => (sectionContent.get(key) || []).join("\n").trim())
+    .filter(Boolean);
+
+  return selected.length > 0 ? selected.join("\n\n") : assembled;
+}
+
+function canonicalizeIntentText(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 function approvalPattern(role: string, trigger: ApprovalTrigger, assembled: string): string {
-  const canonical = assembled.toLowerCase().replace(/\s+/g, " ").trim();
-  return createHash("sha256").update(`${role}|${trigger}|${canonical}`).digest("hex").slice(0, 16);
+  const canonical = canonicalizeIntentText(extractApprovalIntentText(assembled));
+  return createHash("sha256").update(`v2|${role}|${trigger}|${canonical}`).digest("hex").slice(0, 16);
+}
+
+function intentSignature(trigger: ApprovalTrigger, assembled: string): string {
+  const canonical = canonicalizeIntentText(extractApprovalIntentText(assembled));
+  return createHash("sha256").update(`v1|${trigger}|${canonical}`).digest("hex").slice(0, 16);
 }
 
 function parseContextObject(value: unknown): Record<string, unknown> {
@@ -264,6 +299,7 @@ export class DispatchService {
     const approvalTrigger = detectApprovalTrigger(role, assembled);
     const triggerMode = approvalTrigger ? resolveTrustMode(role, approvalTrigger) : null;
     const pattern = approvalTrigger ? approvalPattern(role, approvalTrigger, assembled) : null;
+    const signature = approvalTrigger ? intentSignature(approvalTrigger, assembled) : null;
 
     // Idempotency key: scheduleId + dueAt
     const idempotencyKey = `dispatch:${scheduleId}:${dueAt}`;
@@ -332,7 +368,8 @@ export class DispatchService {
         const hasMatch = approvedHistory.some((item) => {
           const ctx = parseContextObject(item.context);
           const approvedPattern = typeof ctx.approvalPattern === "string" ? ctx.approvalPattern : null;
-          if (!approvedPattern || approvedPattern !== pattern) return false;
+          const approvedSignature = typeof ctx.intentSignature === "string" ? ctx.intentSignature : null;
+          if (approvedPattern !== pattern && approvedSignature !== signature) return false;
           if (triggerMode === "once-ever") return true;
           const approvedSessionId = typeof ctx.sessionId === "string" ? ctx.sessionId : null;
           return approvedSessionId === agent.routingKey;
@@ -363,6 +400,7 @@ export class DispatchService {
           projectId: task.projectId,
           sessionId: agent.routingKey,
           approvalPattern: pattern,
+          intentSignature: signature,
           trustMode: triggerMode,
         },
         taskRunId: taskRun.id,
@@ -398,6 +436,7 @@ export class DispatchService {
               templateId: schedule.templateId,
               trustMode: triggerMode,
               approvalPattern: pattern,
+              intentSignature: signature,
             },
           },
         });
@@ -412,6 +451,7 @@ export class DispatchService {
               trigger: approvalTrigger,
               trustMode: triggerMode,
               approvalPattern: pattern,
+              intentSignature: signature,
             },
           },
         });
@@ -432,6 +472,7 @@ export class DispatchService {
               templateId: schedule.templateId,
               trustMode: triggerMode,
               approvalPattern: pattern,
+              intentSignature: signature,
             },
           },
         });
@@ -445,6 +486,7 @@ export class DispatchService {
               trigger: approvalTrigger,
               trustMode: triggerMode,
               approvalPattern: pattern,
+              intentSignature: signature,
             },
           },
         });

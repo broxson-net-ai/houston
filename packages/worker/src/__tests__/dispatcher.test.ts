@@ -51,14 +51,46 @@ vi.mock("@houston/shared", () => ({
   },
 }));
 
-process.env.HOUSTON_APPROVAL_TRUST_DEFAULT = "once-ever";
-process.env.HOUSTON_APPROVAL_TRUST_MODES = "";
-
 import { DispatchService } from "../dispatcher.js";
 
+function extractApprovalIntentText(assembled: string): string {
+  const sectionContent = new Map<string, string[]>();
+  let currentSection = "BODY";
+  sectionContent.set(currentSection, []);
+
+  for (const line of assembled.split(/\r?\n/)) {
+    const marker = line.match(/^===\s+(.+?)\s+===$/);
+    if (marker) {
+      currentSection = marker[1].trim().toUpperCase();
+      if (!sectionContent.has(currentSection)) sectionContent.set(currentSection, []);
+      continue;
+    }
+    sectionContent.get(currentSection)?.push(line);
+  }
+
+  const selected = ["TASK INSTRUCTIONS", "OVERRIDE", "REVISION"]
+    .map((key) => (sectionContent.get(key) || []).join("\n").trim())
+    .filter(Boolean);
+
+  return selected.length > 0 ? selected.join("\n\n") : assembled;
+}
+
+function canonicalizeIntentText(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 function approvalPattern(role: string, trigger: string, assembled: string): string {
-  const canonical = assembled.toLowerCase().replace(/\s+/g, " ").trim();
-  return createHash("sha256").update(`${role}|${trigger}|${canonical}`).digest("hex").slice(0, 16);
+  const canonical = canonicalizeIntentText(extractApprovalIntentText(assembled));
+  return createHash("sha256").update(`v2|${role}|${trigger}|${canonical}`).digest("hex").slice(0, 16);
+}
+
+function setTrustEnv(defaultMode: string, modes: Record<string, string> = {}) {
+  process.env.HOUSTON_APPROVAL_TRUST_DEFAULT = defaultMode;
+  process.env.HOUSTON_APPROVAL_TRUST_MODES = Object.keys(modes).length ? JSON.stringify(modes) : "";
 }
 
 describe("DispatchService.assembleInstructions", () => {
@@ -123,6 +155,7 @@ describe("DispatchService.dispatch", () => {
     mockDb.taskEvent.create.mockResolvedValue({});
     mockDb.approvalRequest.findUnique.mockResolvedValue(null);
     mockDb.approvalRequest.findMany.mockResolvedValue([]);
+    setTrustEnv("always");
     mockGateway = {
       isConnected: vi.fn().mockReturnValue(true),
       request: vi.fn(),
@@ -294,6 +327,8 @@ describe("DispatchService.dispatch", () => {
   });
 
   it("auto-approves matching trust-ladder request and dispatches immediately", async () => {
+    setTrustEnv("always", { "exec-assistant.external-send": "once-ever" });
+
     const scheduleId = "sched-trust-1";
     const dueAt = new Date("2026-01-01T08:30:00Z").toISOString();
     const instructions = "Draft and send an email update to client";
@@ -358,6 +393,116 @@ describe("DispatchService.dispatch", () => {
         }),
       })
     );
+  });
+
+  it("requires approval for once-per-session when prior approval is from another session", async () => {
+    setTrustEnv("always", { "exec-assistant.external-send": "once-per-session" });
+
+    const scheduleId = "sched-trust-session-mismatch";
+    const dueAt = new Date("2026-01-01T08:45:00Z").toISOString();
+    const instructions = "Draft and send an email update to client";
+    const assembled = `=== TASK INSTRUCTIONS ===\n\n${instructions}`;
+    const pattern = approvalPattern("exec-assistant", "external-send", assembled);
+
+    mockDb.schedule.findUnique.mockResolvedValue({
+      id: scheduleId,
+      templateId: "tmpl-trust-session-mismatch",
+      template: {
+        id: "tmpl-trust-session-mismatch",
+        name: "Trust Ladder Session Mismatch",
+        defaultAgentId: "agent-exec",
+        instructions,
+        tags: [],
+        priority: 0,
+      },
+    });
+    mockDb.agent.findUnique.mockResolvedValue({
+      id: "agent-exec",
+      routingKey: "agent:exec-assistant:main",
+    });
+    mockDb.preInstructionsVersion.findFirst.mockResolvedValue(null);
+    mockDb.template.findUnique.mockResolvedValue({
+      id: "tmpl-trust-session-mismatch",
+      instructions,
+      defaultAgentId: "agent-exec",
+    });
+    mockDb.taskRun.findFirst.mockResolvedValue(null);
+    mockDb.task.create.mockResolvedValue({ id: "task-trust-session-mismatch", status: "QUEUE", projectId: null });
+    mockDb.taskRun.create.mockResolvedValue({ id: "run-trust-session-mismatch", idempotencyKey: `dispatch:${scheduleId}:${dueAt}` });
+    mockDb.approvalRequest.findMany.mockResolvedValue([
+      {
+        id: "approval-history-session-mismatch",
+        decision: "APPROVED",
+        context: {
+          approvalPattern: pattern,
+          sessionId: "agent:exec-assistant:other",
+        },
+      },
+    ]);
+    mockDb.approvalRequest.create.mockResolvedValue({ id: "approval-session-mismatch" });
+
+    const service = new DispatchService(mockGateway as any);
+    await service.dispatch({ scheduleId, dueAt });
+
+    expect(mockGateway.request).not.toHaveBeenCalled();
+    expect(mockDb.approvalRequest.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.not.objectContaining({ decision: "APPROVED" }),
+      })
+    );
+    expect(mockDb.taskEvent.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ message: expect.stringContaining("Awaiting approval") }),
+      })
+    );
+  });
+
+  it("auto-approves for auto mode without history lookup", async () => {
+    setTrustEnv("always", { "exec-assistant.external-send": "auto" });
+
+    const scheduleId = "sched-trust-auto";
+    const dueAt = new Date("2026-01-01T08:50:00Z").toISOString();
+    const instructions = "Draft and send an email update to client";
+
+    mockDb.schedule.findUnique.mockResolvedValue({
+      id: scheduleId,
+      templateId: "tmpl-trust-auto",
+      template: {
+        id: "tmpl-trust-auto",
+        name: "Trust Ladder Auto",
+        defaultAgentId: "agent-exec",
+        instructions,
+        tags: [],
+        priority: 0,
+      },
+    });
+    mockDb.agent.findUnique.mockResolvedValue({
+      id: "agent-exec",
+      routingKey: "agent:exec-assistant:main",
+    });
+    mockDb.preInstructionsVersion.findFirst.mockResolvedValue(null);
+    mockDb.template.findUnique.mockResolvedValue({
+      id: "tmpl-trust-auto",
+      instructions,
+      defaultAgentId: "agent-exec",
+    });
+    mockDb.taskRun.findFirst.mockResolvedValue(null);
+    mockDb.task.create.mockResolvedValue({ id: "task-trust-auto", status: "QUEUE", projectId: null });
+    mockDb.taskRun.create.mockResolvedValue({ id: "run-trust-auto", idempotencyKey: `dispatch:${scheduleId}:${dueAt}` });
+    mockDb.approvalRequest.create.mockResolvedValue({ id: "approval-auto-mode" });
+    mockDb.taskRun.update.mockResolvedValue({ id: "run-trust-auto", status: "ACCEPTED" });
+    mockGateway.request.mockResolvedValue({ runId: "gw-run-trust-auto" });
+
+    const service = new DispatchService(mockGateway as any);
+    await service.dispatch({ scheduleId, dueAt });
+
+    expect(mockDb.approvalRequest.findMany).not.toHaveBeenCalled();
+    expect(mockDb.approvalRequest.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ decision: "APPROVED", decider: "policy:trust-ladder" }),
+      })
+    );
+    expect(mockGateway.request).toHaveBeenCalled();
   });
 
   it("resumes approved approval requests and dispatches blocked task run", async () => {
