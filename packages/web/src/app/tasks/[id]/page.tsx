@@ -71,9 +71,14 @@ export default function TaskDetailPage() {
   if (!task) return <div className="min-h-screen bg-background"><Nav /><p className="p-8 text-muted-foreground">Loading...</p></div>;
 
   const activeRun = task.taskRuns.find((r) => r.id === activeRunId) ?? task.taskRuns[task.taskRuns.length - 1];
-  const allEvents = [...task.taskEvents, ...(activeRun?.taskEvents ?? [])].sort(
-    (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
-  );
+  const allEvents = Array.from(
+    [...task.taskEvents, ...(activeRun?.taskEvents ?? [])].reduce((acc, event) => {
+      if (!acc.has(event.id)) {
+        acc.set(event.id, event);
+      }
+      return acc;
+    }, new Map<string, TaskEvent>()).values()
+  ).sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
 
   return (
     <div className="min-h-screen bg-background">
@@ -126,8 +131,8 @@ export default function TaskDetailPage() {
           <div className="md:col-span-1 space-y-2">
             <h2 className="font-semibold text-sm uppercase tracking-wide text-muted-foreground">Activity Timeline</h2>
             <div className="space-y-2">
-              {allEvents.map((event) => (
-                <div key={event.id} className="flex gap-3 text-sm">
+              {allEvents.map((event, index) => (
+                <div key={`${event.id}:${event.createdAt}:${index}`} className="flex gap-3 text-sm">
                   <div className="shrink-0 w-2 h-2 mt-1.5 rounded-full bg-primary" />
                   <div>
                     <p className="font-medium">{event.type}</p>
