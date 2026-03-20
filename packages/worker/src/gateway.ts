@@ -17,9 +17,18 @@ export type GatewayEvent = {
   [key: string]: unknown;
 };
 
-const REQUEST_TIMEOUT_MS = 30_000;
-const RECONNECT_BASE_MS = 1_000;
-const RECONNECT_MAX_MS = 30_000;
+function parsePositiveIntEnv(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (!raw) return fallback;
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
+  return parsed;
+}
+
+const REQUEST_TIMEOUT_MS = parsePositiveIntEnv("HOUSTON_GATEWAY_REQUEST_TIMEOUT_MS", 30_000);
+const CONNECT_TIMEOUT_MS = parsePositiveIntEnv("HOUSTON_GATEWAY_CONNECT_TIMEOUT_MS", 30_000);
+const RECONNECT_BASE_MS = parsePositiveIntEnv("HOUSTON_GATEWAY_RETRY_BASE_DELAY_MS", 1_000);
+const RECONNECT_MAX_MS = parsePositiveIntEnv("HOUSTON_GATEWAY_RETRY_MAX_DELAY_MS", 30_000);
 
 // OpenClaw gateway protocol uses an allowlist for these values.
 // (See OpenClaw dist: GATEWAY_CLIENT_IDS / GATEWAY_CLIENT_MODES)
@@ -132,10 +141,12 @@ export class GatewayClient extends EventEmitter {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private pending = new Map<string, RequestCallback>();
   private lastHeartbeat: Date | undefined;
+  private url = "";
+  private token = "";
 
-  async connect(url: string, token: string): Promise<void> {
+  async connect(url: string, token?: string): Promise<void> {
     this.url = url;
-    this.token = token;
+    this.token = token ?? "";
     this.shouldReconnect = true;
     return this._connect();
   }
@@ -156,10 +167,10 @@ export class GatewayClient extends EventEmitter {
         const ws = new WebSocket(wsUrl.toString());
         this.ws = ws;
 
-        const connectTimeout = setTimeout(() => {
-          ws.terminate();
-          reject(new Error("Gateway connection timeout"));
-        }, REQUEST_TIMEOUT_MS);
+         const connectTimeout = setTimeout(() => {
+           ws.terminate();
+           reject(new Error("Gateway connection timeout"));
+         }, CONNECT_TIMEOUT_MS);
 
         let settled = false;
         const settleOk = () => {
@@ -339,12 +350,14 @@ export class GatewayClient extends EventEmitter {
   }
 
   private _scheduleReconnect() {
-    const delay = Math.min(
+    const baseDelay = Math.min(
       RECONNECT_BASE_MS * Math.pow(2, this.reconnectAttempts),
       RECONNECT_MAX_MS
     );
+    const jitter = Math.floor(Math.random() * Math.max(250, Math.floor(baseDelay * 0.2)));
+    const delay = Math.min(RECONNECT_MAX_MS, baseDelay + jitter);
     this.reconnectAttempts++;
-    setTimeout(() => {
+    this.reconnectTimer = setTimeout(() => {
       if (!this.shouldReconnect) return;
       this._connect().catch((err) => {
         console.error("[gateway] Reconnect failed:", err.message);
@@ -383,6 +396,10 @@ export class GatewayClient extends EventEmitter {
 
   disconnect() {
     this.shouldReconnect = false;
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
     this.ws?.close();
     this.ws = null;
   }

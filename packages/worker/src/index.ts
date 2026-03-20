@@ -6,6 +6,7 @@ import { HoustonScheduler } from "./scheduler.js";
 import { GatewayClient } from "./gateway.js";
 import { DispatchService } from "./dispatcher.js";
 import { GatewayEventHandler } from "./events.js";
+import { createShutdownHandler } from "./shutdown.js";
 import { db } from "@houston/shared";
 
 const SKILLS_PATH = process.env.OPENCLAW_SKILLS_PATH ?? "";
@@ -340,45 +341,13 @@ async function main() {
   scheduleDailyCleanup();
 
   // Graceful shutdown
-  const shutdown = async (signal: string) => {
-    console.log(`[worker] ${signal} received, shutting down...`);
-
-    try {
-      await scheduler.stop();
-      console.log("[worker] Scheduler stopped");
-    } catch (err) {
-      const errorText = err instanceof Error ? err.message : String(err);
-      console.error(`[worker] Failed to stop scheduler: ${errorText}`);
-    }
-
-    if (heartbeatTimer) {
-      clearInterval(heartbeatTimer);
-      console.log("[worker] Heartbeat timer stopped");
-    }
-
-    if (approvalResumeTimer) {
-      clearInterval(approvalResumeTimer);
-      console.log("[worker] Approval resume timer stopped");
-    }
-
-    if (trustVerifyTimer) {
-      clearInterval(trustVerifyTimer);
-      console.log("[worker] Trust verification timer stopped");
-    }
-
-    if (gatewayClient) {
-      try {
-        gatewayClient.disconnect();
-        console.log("[worker] Gateway disconnected");
-      } catch (err) {
-        const errorText = err instanceof Error ? err.message : String(err);
-        console.error(`[worker] Failed to disconnect gateway: ${errorText}`);
-      }
-    }
-
-    console.log("[worker] Shutdown complete, exiting...");
-    process.exit(0);
-  };
+  const shutdown = createShutdownHandler({
+    scheduler,
+    heartbeatTimer,
+    approvalResumeTimer,
+    trustVerifyTimer,
+    gatewayClient,
+  });
 
   process.on("SIGINT", () => shutdown("SIGINT"));
   process.on("SIGTERM", () => shutdown("SIGTERM"));

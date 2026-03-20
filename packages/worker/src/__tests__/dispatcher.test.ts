@@ -249,6 +249,110 @@ describe("DispatchService.dispatch", () => {
     );
   });
 
+  it("retries retriable gateway errors and succeeds on later attempt", async () => {
+    vi.useFakeTimers();
+    const randomSpy = vi.spyOn(Math, "random").mockReturnValue(0);
+
+    process.env.HOUSTON_GATEWAY_RETRY_MAX_ATTEMPTS = "3";
+    process.env.HOUSTON_GATEWAY_RETRY_BASE_DELAY_MS = "1";
+    process.env.HOUSTON_GATEWAY_RETRY_MAX_DELAY_MS = "1";
+
+    const scheduleId = "sched-retry-success";
+    const dueAt = new Date("2026-01-01T06:30:00Z").toISOString();
+
+    mockDb.schedule.findUnique.mockResolvedValue({
+      id: scheduleId,
+      templateId: "tmpl-1",
+      template: {
+        id: "tmpl-1",
+        name: "Retry Test",
+        defaultAgentId: "agent-1",
+        instructions: "Do the thing",
+        tags: [],
+        priority: 0,
+      },
+    });
+    mockDb.agent.findUnique.mockResolvedValue({
+      id: "agent-1",
+      routingKey: "test-agent",
+    });
+    mockDb.preInstructionsVersion.findFirst.mockResolvedValue(null);
+    mockDb.template.findUnique.mockResolvedValue({
+      id: "tmpl-1",
+      instructions: "Do the thing",
+      defaultAgentId: "agent-1",
+    });
+    mockDb.taskRun.findFirst.mockResolvedValue(null);
+    mockDb.task.create.mockResolvedValue({ id: "task-retry-success", status: "QUEUE" });
+    mockDb.taskRun.create.mockResolvedValue({ id: "run-retry-success", idempotencyKey: `dispatch:${scheduleId}:${dueAt}` });
+    mockDb.taskRun.update.mockResolvedValue({});
+
+    mockGateway.request
+      .mockRejectedValueOnce(new Error("Request timeout: agent"))
+      .mockResolvedValueOnce({ runId: "gw-run-retry-success" });
+
+    const service = new DispatchService(mockGateway as any);
+    const pending = service.dispatch({ scheduleId, dueAt });
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    await pending;
+
+    expect(mockGateway.request).toHaveBeenCalledTimes(2);
+    expect(mockDb.task.update).not.toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ status: "FAILED" }) })
+    );
+
+    randomSpy.mockRestore();
+    vi.useRealTimers();
+  });
+
+  it("does not retry non-retriable gateway errors", async () => {
+    process.env.HOUSTON_GATEWAY_RETRY_MAX_ATTEMPTS = "3";
+    process.env.HOUSTON_GATEWAY_RETRY_BASE_DELAY_MS = "1";
+    process.env.HOUSTON_GATEWAY_RETRY_MAX_DELAY_MS = "1";
+
+    const scheduleId = "sched-no-retry";
+    const dueAt = new Date("2026-01-01T06:40:00Z").toISOString();
+
+    mockDb.schedule.findUnique.mockResolvedValue({
+      id: scheduleId,
+      templateId: "tmpl-1",
+      template: {
+        id: "tmpl-1",
+        name: "No Retry Test",
+        defaultAgentId: "agent-1",
+        instructions: "Do the thing",
+        tags: [],
+        priority: 0,
+      },
+    });
+    mockDb.agent.findUnique.mockResolvedValue({
+      id: "agent-1",
+      routingKey: "test-agent",
+    });
+    mockDb.preInstructionsVersion.findFirst.mockResolvedValue(null);
+    mockDb.template.findUnique.mockResolvedValue({
+      id: "tmpl-1",
+      instructions: "Do the thing",
+      defaultAgentId: "agent-1",
+    });
+    mockDb.taskRun.findFirst.mockResolvedValue(null);
+    mockDb.task.create.mockResolvedValue({ id: "task-no-retry", status: "QUEUE" });
+    mockDb.taskRun.create.mockResolvedValue({ id: "run-no-retry", idempotencyKey: `dispatch:${scheduleId}:${dueAt}` });
+    mockDb.taskRun.update.mockResolvedValue({});
+    mockDb.task.update.mockResolvedValue({});
+
+    mockGateway.request.mockRejectedValue(new Error("Unauthorized"));
+
+    const service = new DispatchService(mockGateway as any);
+    await service.dispatch({ scheduleId, dueAt });
+
+    expect(mockGateway.request).toHaveBeenCalledTimes(1);
+    expect(mockDb.task.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ status: "FAILED" }) })
+    );
+  });
+
   it("idempotency: skips dispatch if TaskRun with same key already exists", async () => {
     const scheduleId = "sched-3";
     const dueAt = new Date("2026-01-01T07:00:00Z").toISOString();

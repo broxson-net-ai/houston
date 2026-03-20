@@ -16,6 +16,18 @@ type ApprovalTrigger =
 
 type TrustMode = "always" | "once-per-session" | "once-ever" | "auto";
 
+function parsePositiveIntEnv(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (!raw) return fallback;
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
+  return parsed;
+}
+
+const GATEWAY_RETRY_MAX_ATTEMPTS = parsePositiveIntEnv("HOUSTON_GATEWAY_RETRY_MAX_ATTEMPTS", 3);
+const GATEWAY_RETRY_BASE_DELAY_MS = parsePositiveIntEnv("HOUSTON_GATEWAY_RETRY_BASE_DELAY_MS", 500);
+const GATEWAY_RETRY_MAX_DELAY_MS = parsePositiveIntEnv("HOUSTON_GATEWAY_RETRY_MAX_DELAY_MS", 8_000);
+
 function deriveRoleFromRoutingKey(routingKey: string): string {
   const m = String(routingKey || "").match(/^agent:([^:]+):/i);
   return (m?.[1] || "main").toLowerCase();
@@ -149,6 +161,33 @@ function parseContextObject(value: unknown): Record<string, unknown> {
   return {};
 }
 
+function isNonRetriableGatewayError(errorText: string): boolean {
+  return /\b(unauthorized|forbidden|invalid token|invalid auth|authentication failed|connect\.challenge missing nonce|invalid device identity)\b/i.test(
+    errorText
+  );
+}
+
+function isRetriableGatewayError(errorText: string): boolean {
+  if (!errorText) return false;
+  if (isNonRetriableGatewayError(errorText)) return false;
+  return /\b(timeout|timed out|gateway not connected|gateway disconnected|closed before connect|econnreset|econnrefused|etimedout|network|socket hang up)\b/i.test(
+    errorText
+  );
+}
+
+function computeRetryDelayMs(attempt: number): number {
+  const exp = Math.min(
+    GATEWAY_RETRY_BASE_DELAY_MS * Math.pow(2, Math.max(0, attempt - 1)),
+    GATEWAY_RETRY_MAX_DELAY_MS
+  );
+  const jitter = Math.floor(Math.random() * Math.max(250, Math.floor(exp * 0.2)));
+  return Math.min(GATEWAY_RETRY_MAX_DELAY_MS, exp + jitter);
+}
+
+async function sleep(ms: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 export type DispatchJobData = {
   scheduleId: string;
   dueAt: string; // ISO string
@@ -182,42 +221,63 @@ export class DispatchService {
       timeout: 0,
     };
 
-    try {
-      const response = await this.gatewayClient.request(
-        "agent",
-        requestPayload,
-        idempotencyKey
-      ) as Record<string, unknown>;
+    for (let attempt = 1; attempt <= GATEWAY_RETRY_MAX_ATTEMPTS; attempt++) {
+      try {
+        const response = await this.gatewayClient.request(
+          "agent",
+          requestPayload,
+          idempotencyKey
+        ) as Record<string, unknown>;
 
-      const gatewayRunId = (response?.runId as string) ?? null;
+        const gatewayRunId = (response?.runId as string) ?? null;
 
-      await db.taskRun.update({
-        where: { id: taskRun.id },
-        data: {
-          wsRequestId: taskRun.id,
-          gatewayRunId,
-          requestPayload: requestPayload as object,
-          responsePayload: response as object,
-          status: TaskRunStatus.ACCEPTED,
-        },
-      });
+        await db.taskRun.update({
+          where: { id: taskRun.id },
+          data: {
+            wsRequestId: taskRun.id,
+            gatewayRunId,
+            requestPayload: requestPayload as object,
+            responsePayload: response as object,
+            status: TaskRunStatus.ACCEPTED,
+          },
+        });
 
-      await db.taskEvent.create({
-        data: {
-          taskId: task.id,
-          taskRunId: taskRun.id,
-          scheduleId: task.scheduleId,
-          type: "DISPATCHED",
-          message: `Dispatched to agent ${agent.routingKey}`,
-          metadata: { gatewayRunId, templateId },
-        },
-      });
+        await db.taskEvent.create({
+          data: {
+            taskId: task.id,
+            taskRunId: taskRun.id,
+            scheduleId: task.scheduleId,
+            type: "DISPATCHED",
+            message: `Dispatched to agent ${agent.routingKey}`,
+            metadata: { gatewayRunId, templateId },
+          },
+        });
 
-      return { ok: true, runId: gatewayRunId };
-    } catch (err) {
-      const errorText = err instanceof Error ? err.message : String(err);
-      return { ok: false, errorText };
+        return { ok: true, runId: gatewayRunId };
+      } catch (err) {
+        const errorText = err instanceof Error ? err.message : String(err);
+        const retriable = isRetriableGatewayError(errorText);
+        const lastAttempt = attempt >= GATEWAY_RETRY_MAX_ATTEMPTS;
+
+        if (!retriable || lastAttempt) {
+          const classification = retriable ? "retriable-final" : "non-retriable";
+          console.error(
+            `[dispatcher] Gateway dispatch failed (${classification}) ` +
+              `(attempt ${attempt}/${GATEWAY_RETRY_MAX_ATTEMPTS}, taskRunId: ${taskRun.id}): ${errorText}`
+          );
+          return { ok: false, errorText };
+        }
+
+        const delayMs = computeRetryDelayMs(attempt);
+        console.warn(
+          `[dispatcher] Gateway dispatch retry scheduled ` +
+            `(attempt ${attempt}/${GATEWAY_RETRY_MAX_ATTEMPTS}, delayMs=${delayMs}, taskRunId: ${taskRun.id}): ${errorText}`
+        );
+        await sleep(delayMs);
+      }
     }
+
+    return { ok: false, errorText: "Gateway dispatch failed: exhausted retry attempts" };
   }
 
   async assembleInstructions(

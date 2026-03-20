@@ -154,4 +154,9 @@ houston/
 | `HOUSTON_GRACE_WINDOW_SECONDS` | `300` | Grace period before flagging a missed run |
 | `HOUSTON_LOOKBACK_WINDOW_HOURS` | `48` | How far back to check for missed runs |
 | `HOUSTON_DISPATCH_CONCURRENCY` | `5` | Max concurrent dispatch jobs |
+| `HOUSTON_GATEWAY_REQUEST_TIMEOUT_MS` | `30000` | Per-request gateway timeout (ms) |
+| `HOUSTON_GATEWAY_CONNECT_TIMEOUT_MS` | `30000` | Initial gateway connect timeout (ms) |
+| `HOUSTON_GATEWAY_RETRY_MAX_ATTEMPTS` | `3` | Dispatcher retry attempts for retriable gateway failures |
+| `HOUSTON_GATEWAY_RETRY_BASE_DELAY_MS` | `500` | Base retry backoff delay (ms) |
+| `HOUSTON_GATEWAY_RETRY_MAX_DELAY_MS` | `8000` | Max retry backoff delay (ms) |
 | `MAX_LOG_BYTES` | `10485760` (10MB) | Max log storage per task run |
