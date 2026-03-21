@@ -4,7 +4,7 @@ import { useState } from "react";
 import MarkdownPreview from "@/components/MarkdownPreview";
 import type { ProjectSummary } from "@/lib/projects";
 
-const STATUS_OPTIONS = ["active", "paused", "done", "draft"];
+const STATUS_OPTIONS = ["active", "paused", "done", "draft", "archived"];
 const DOC_LABELS = {
   project: "Project Doc",
   actionPlan: "Action Plan",
@@ -21,6 +21,7 @@ export default function ProjectDetailView({ project }: { project: ProjectSummary
   const [docContent, setDocContent] = useState("");
   const [loadingContent, setLoadingContent] = useState(false);
   const [docError, setDocError] = useState("");
+  const canArchive = project.canArchive || project.status === "archived";
 
   async function updateStatus(next: string) {
     setSaving(true);
@@ -89,13 +90,19 @@ export default function ProjectDetailView({ project }: { project: ProjectSummary
           >
             <option value="">Unknown</option>
             {STATUS_OPTIONS.map((option) => (
-              <option key={option} value={option}>
+              <option key={option} value={option} disabled={option === "archived" && !canArchive}>
                 {option}
               </option>
             ))}
           </select>
         </div>
       </div>
+
+      {!canArchive ? (
+        <p className="text-xs text-muted-foreground">
+          Archive becomes available after status is done and there are no pending/future actions.
+        </p>
+      ) : null}
 
       {error ? <p className="text-sm text-red-600">{error}</p> : null}
 

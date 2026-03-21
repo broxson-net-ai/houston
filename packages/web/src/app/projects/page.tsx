@@ -1,10 +1,13 @@
 import { listProjectsWithCounts } from "@/lib/projects";
+import { getPortfolioExecutionBoard } from "@/lib/portfolio-execution";
 import { Nav } from "@/components/nav";
 import ProjectsView from "./ProjectsView";
+import PortfolioExecutionBoardCard from "./PortfolioExecutionBoard";
 import Link from "next/link";
 
 export default async function ProjectsPage() {
   const projects = await listProjectsWithCounts();
+  const portfolioBoard = getPortfolioExecutionBoard();
 
   return (
     <div className="min-h-screen bg-background">
@@ -24,6 +27,7 @@ export default async function ProjectsPage() {
             + New Project
           </Link>
         </div>
+        {portfolioBoard ? <PortfolioExecutionBoardCard board={portfolioBoard} /> : null}
         <ProjectsView projects={projects} />
       </div>
     </div>

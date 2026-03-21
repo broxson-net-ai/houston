@@ -17,6 +17,7 @@ type ProjectDocType = keyof typeof DOC_LABELS;
 function badgeColor(status?: string) {
   if (!status) return "bg-muted text-muted-foreground";
   const value = status.toLowerCase();
+  if (value.includes("archiv")) return "bg-slate-200 text-slate-800";
   if (value.includes("paused")) return "bg-yellow-100 text-yellow-800";
   if (value.includes("done") || value.includes("complete"))
     return "bg-emerald-100 text-emerald-800";
@@ -29,6 +30,7 @@ export default function ProjectsView({ projects: initialProjects }: { projects: 
   const [statusFilter, setStatusFilter] = useState("");
   const [ownerFilter, setOwnerFilter] = useState("");
   const [tagFilter, setTagFilter] = useState("");
+  const [showArchived, setShowArchived] = useState(false);
   const [projects, setProjects] = useState<ProjectSummary[]>(initialProjects);
   const [modalProject, setModalProject] = useState<ProjectSummary | null>(null);
   const [selectedDoc, setSelectedDoc] = useState<ProjectDocType | null>(null);
@@ -43,7 +45,12 @@ export default function ProjectsView({ projects: initialProjects }: { projects: 
   useEffect(() => {
     const refreshProjects = async () => {
       try {
-        const res = await fetch("/api/projects");
+        const params = new URLSearchParams();
+        if (showArchived) {
+          params.set("includeArchived", "true");
+        }
+        const suffix = params.toString() ? `?${params.toString()}` : "";
+        const res = await fetch(`/api/projects${suffix}`);
         if (!res.ok) return;
         const data = await res.json();
         setProjects(data.projects);
@@ -60,7 +67,7 @@ export default function ProjectsView({ projects: initialProjects }: { projects: 
     const interval = setInterval(refreshProjects, 30000);
 
     return () => clearInterval(interval);
-  }, []);
+  }, [showArchived]);
 
   const filters = useMemo(() => {
     const statuses = new Set<string>();
@@ -173,7 +180,7 @@ export default function ProjectsView({ projects: initialProjects }: { projects: 
 
   return (
     <div className="space-y-6">
-      <div className="grid gap-4 md:grid-cols-4">
+      <div className="grid gap-4 md:grid-cols-5">
         <input
           className="w-full rounded-md border bg-background px-3 py-2 text-sm"
           placeholder="Search projects"
@@ -216,6 +223,14 @@ export default function ProjectsView({ projects: initialProjects }: { projects: 
             </option>
           ))}
         </select>
+        <label className="flex items-center gap-2 rounded-md border px-3 py-2 text-sm">
+          <input
+            type="checkbox"
+            checked={showArchived}
+            onChange={(event) => setShowArchived(event.target.checked)}
+          />
+          Show archived
+        </label>
       </div>
 
       {lastUpdated && (

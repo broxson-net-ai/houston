@@ -7,9 +7,10 @@ import {
 } from "@/lib/projects";
 import { requireAuth } from "@/lib/session";
 
-export async function GET() {
+export async function GET(req: NextRequest) {
   try {
-    const projects = await listProjectsWithCounts();
+    const includeArchived = req.nextUrl.searchParams.get("includeArchived") === "true";
+    const projects = await listProjectsWithCounts({ includeArchived });
     return NextResponse.json({ projects });
   } catch {
     return NextResponse.json(
@@ -50,6 +51,12 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "invalid status" }, { status: 400 });
     }
     const status = isValidProjectStatus(statusRaw) ? statusRaw : "draft";
+    if (status === "archived") {
+      return NextResponse.json(
+        { error: "new projects cannot start archived" },
+        { status: 400 }
+      );
+    }
 
     const result = createProject({
       slug,

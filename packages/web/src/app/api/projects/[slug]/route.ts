@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
+  canArchiveProject,
   deleteProject,
   getProject,
   isValidProjectStatus,
@@ -14,7 +15,7 @@ export async function GET(
 ) {
   try {
     const { slug } = await params;
-    const projects = await listProjectsWithCounts();
+    const projects = await listProjectsWithCounts({ includeArchived: true });
     const project = projects.find((item) => item.slug === slug);
     if (!project) {
       return NextResponse.json({ error: "Not found" }, { status: 404 });
@@ -41,9 +42,23 @@ export async function PUT(
     const rawStatus = typeof body.status === "string" ? body.status.trim().toLowerCase() : "";
     if (!rawStatus || !isValidProjectStatus(rawStatus)) {
       return NextResponse.json(
-        { error: "Invalid status. Allowed: active, paused, done, draft" },
+        { error: "Invalid status. Allowed: active, paused, done, draft, archived" },
         { status: 400 }
       );
+    }
+
+    if (rawStatus === "archived") {
+      const eligibility = await canArchiveProject(slug);
+      if (!eligibility.canArchive) {
+        return NextResponse.json(
+          {
+            error:
+              "Project cannot be archived until it is done and has no pending/future actions.",
+            blockers: eligibility.blockers,
+          },
+          { status: 400 }
+        );
+      }
     }
 
     const ok = updateProjectStatus(slug, rawStatus);

@@ -9,7 +9,7 @@ export default async function ProjectDetailPage({
   params: Promise<{ slug: string }>;
 }) {
   const { slug } = await params;
-  const projects = await listProjectsWithCounts();
+  const projects = await listProjectsWithCounts({ includeArchived: true });
   const project = projects.find((item) => item.slug === slug);
 
   if (!project) {

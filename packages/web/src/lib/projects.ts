@@ -8,7 +8,7 @@ import matter from "gray-matter";
 import { db } from "@houston/shared";
 import type { Project as PrismaProject } from "@houston/shared";
 
-export const PROJECT_STATUS_VALUES = ["active", "paused", "done", "draft"] as const;
+export const PROJECT_STATUS_VALUES = ["active", "paused", "done", "draft", "archived"] as const;
 
 export type ProjectStatus = (typeof PROJECT_STATUS_VALUES)[number];
 
@@ -37,6 +37,15 @@ export type ProjectSummary = {
   links: ProjectLinks;
   taskCount?: number;
   scheduleCount?: number;
+  openTaskCount?: number;
+  futureScheduleCount?: number;
+  pendingActionCount?: number;
+  canArchive?: boolean;
+  archiveBlockers?: string[];
+};
+
+type ListProjectsOptions = {
+  includeArchived?: boolean;
 };
 
 type RegistryProject = {
@@ -88,8 +97,16 @@ function normalizeStatus(value?: string) {
   if (/\bactive\b/.test(normalized)) return "active";
   if (/\bpaused\b/.test(normalized)) return "paused";
   if (/\bdone\b|\bcomplete(?:d)?\b/.test(normalized)) return "done";
+  if (/\barchiv(?:e|ed|ing)\b/.test(normalized)) return "archived";
   if (/\bdraft\b/.test(normalized)) return "draft";
   return normalized;
+}
+
+function countUncheckedActionItems(slug: string) {
+  const actionPlanPath = path.join(PROJECTS_DIR, slug, DOC_MAP.ACTION_PLAN);
+  if (!fs.existsSync(actionPlanPath)) return 0;
+  const raw = fs.readFileSync(actionPlanPath, "utf8");
+  return raw.split(/\r?\n/).filter((line) => /^\s*-\s*\[\s\]/.test(line)).length;
 }
 
 function parseOverviewSummary(contents: string) {
@@ -289,7 +306,10 @@ function tagForProject(slug: string) {
   return `project:${slug}`;
 }
 
-export async function listProjectsWithCounts(): Promise<ProjectSummary[]> {
+export async function listProjectsWithCounts(
+  options: ListProjectsOptions = {}
+): Promise<ProjectSummary[]> {
+  const includeArchived = options.includeArchived ?? false;
   const projects = listProjects();
   if (projects.length === 0) return projects;
 
@@ -298,12 +318,15 @@ export async function listProjectsWithCounts(): Promise<ProjectSummary[]> {
       select: {
         id: true,
         enabled: true,
+        nextRunAt: true,
         template: { select: { tags: true } },
       },
     }),
     db.task.findMany({
       select: {
         id: true,
+        archivedAt: true,
+        status: true,
         template: { select: { tags: true } },
       },
     }),
@@ -311,10 +334,16 @@ export async function listProjectsWithCounts(): Promise<ProjectSummary[]> {
 
   const scheduleCounts = new Map<string, number>();
   const taskCounts = new Map<string, number>();
+  const openTaskCounts = new Map<string, number>();
+  const futureScheduleCounts = new Map<string, number>();
+  const pendingActionCounts = new Map<string, number>();
 
   projects.forEach((project) => {
     scheduleCounts.set(project.slug, 0);
     taskCounts.set(project.slug, 0);
+    openTaskCounts.set(project.slug, 0);
+    futureScheduleCounts.set(project.slug, 0);
+    pendingActionCounts.set(project.slug, countUncheckedActionItems(project.slug));
   });
 
   schedules.forEach((schedule) => {
@@ -322,6 +351,9 @@ export async function listProjectsWithCounts(): Promise<ProjectSummary[]> {
     const slug = projects.find((p) => tags.includes(tagForProject(p.slug)))?.slug;
     if (!slug) return;
     scheduleCounts.set(slug, (scheduleCounts.get(slug) ?? 0) + 1);
+    if (schedule.enabled && schedule.nextRunAt) {
+      futureScheduleCounts.set(slug, (futureScheduleCounts.get(slug) ?? 0) + 1);
+    }
   });
 
   tasks.forEach((task) => {
@@ -329,13 +361,55 @@ export async function listProjectsWithCounts(): Promise<ProjectSummary[]> {
     const slug = projects.find((p) => tags.includes(tagForProject(p.slug)))?.slug;
     if (!slug) return;
     taskCounts.set(slug, (taskCounts.get(slug) ?? 0) + 1);
+    if (!task.archivedAt && (task.status === "QUEUE" || task.status === "IN_PROGRESS")) {
+      openTaskCounts.set(slug, (openTaskCounts.get(slug) ?? 0) + 1);
+    }
   });
 
-  return projects.map((project) => ({
-    ...project,
-    scheduleCount: scheduleCounts.get(project.slug) ?? 0,
-    taskCount: taskCounts.get(project.slug) ?? 0,
-  }));
+  const withCounts = projects.map((project) => {
+    const pendingActionCount = pendingActionCounts.get(project.slug) ?? 0;
+    const openTaskCount = openTaskCounts.get(project.slug) ?? 0;
+    const futureScheduleCount = futureScheduleCounts.get(project.slug) ?? 0;
+    const archiveBlockers: string[] = [];
+
+    if (project.status !== "done" && project.status !== "archived") {
+      archiveBlockers.push("status-not-done");
+    }
+    if (pendingActionCount > 0) {
+      archiveBlockers.push("pending-action-items");
+    }
+    if (openTaskCount > 0) {
+      archiveBlockers.push("pending-tasks");
+    }
+    if (futureScheduleCount > 0) {
+      archiveBlockers.push("future-schedules");
+    }
+
+    return {
+      ...project,
+      scheduleCount: scheduleCounts.get(project.slug) ?? 0,
+      taskCount: taskCounts.get(project.slug) ?? 0,
+      pendingActionCount,
+      openTaskCount,
+      futureScheduleCount,
+      canArchive: archiveBlockers.length === 0 || project.status === "archived",
+      archiveBlockers,
+    };
+  });
+
+  return includeArchived
+    ? withCounts
+    : withCounts.filter((project) => project.status !== "archived");
+}
+
+export async function canArchiveProject(slug: string): Promise<{ canArchive: boolean; blockers: string[] }> {
+  const projects = await listProjectsWithCounts({ includeArchived: true });
+  const project = projects.find((item) => item.slug === slug);
+  if (!project) return { canArchive: false, blockers: ["not-found"] };
+  return {
+    canArchive: project.canArchive === true,
+    blockers: project.archiveBlockers ?? [],
+  };
 }
 
 export function getProject(slug: string) {
@@ -534,6 +608,9 @@ export function createProject(input: CreateProjectInput) {
   }
 
   const status = input.status ?? "draft";
+  if (status === "archived") {
+    return { error: "Invalid status for new project", status: 400 as const };
+  }
   const projectDir = path.join(PROJECTS_DIR, input.slug);
   if (fs.existsSync(projectDir)) {
     return { error: "Project already exists", status: 400 as const };
