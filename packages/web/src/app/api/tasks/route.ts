@@ -2,6 +2,69 @@ import { NextRequest, NextResponse } from "next/server";
 import { db, TaskStatus } from "@houston/shared";
 import { requireAuth } from "@/lib/session";
 
+function laneFromText(input: string | null | undefined): string | null {
+  if (!input) return null;
+  const m = input.match(/\bLane:\s*([A-E])\b/i);
+  return m?.[1]?.toUpperCase() ?? null;
+}
+
+function normalize(value: string | null | undefined): string {
+  return String(value || "").trim().toLowerCase();
+}
+
+async function selectAutoAgentId(args: {
+  projectId?: string | null;
+  title: string;
+  instructionsOverride?: string | null;
+}) {
+  const [agents, project] = await Promise.all([
+    db.agent.findMany({ where: { enabled: true }, select: { id: true, name: true, routingKey: true } }),
+    args.projectId
+      ? db.project.findUnique({ where: { id: args.projectId }, select: { slug: true } })
+      : Promise.resolve(null),
+  ]);
+
+  const byName = new Map<string, string>();
+  for (const agent of agents) {
+    byName.set(normalize(agent.name), agent.id);
+    byName.set(normalize(agent.routingKey), agent.id);
+  }
+
+  const lane = laneFromText(args.instructionsOverride);
+  const slug = normalize(project?.slug);
+  const title = normalize(args.title);
+
+  const opsSlugs = new Set([
+    "network-cleanup",
+    "x-monitor",
+    "backups-dr",
+    "dynamic-dns",
+    "external-network",
+    "openclaw-docker-node",
+  ]);
+
+  const bizSlugs = new Set([
+    "liyth-ops-automation",
+    "andante-ops-automation",
+    "creator-education-ops",
+    "approval-audit-log",
+  ]);
+
+  if (lane === "B" || opsSlugs.has(slug) || title.includes("network") || title.includes("backup") || title.includes("monitor")) {
+    return byName.get("ops-agent") ?? byName.get("agent:ops-agent:main") ?? null;
+  }
+
+  if (lane === "D" || bizSlugs.has(slug) || title.includes("liyth") || title.includes("andante") || title.includes("udemy") || title.includes("marketing")) {
+    return byName.get("biz-ops-agent") ?? byName.get("agent:biz-ops-agent:main") ?? null;
+  }
+
+  if (title.includes("email") || title.includes("calendar") || title.includes("inbox")) {
+    return byName.get("exec-assistant") ?? byName.get("agent:exec-assistant:main") ?? null;
+  }
+
+  return byName.get("main") ?? byName.get("agent:main:main") ?? null;
+}
+
 export async function GET(req: NextRequest) {
   const authError = await requireAuth();
   if (authError) return authError;
@@ -100,10 +163,16 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "title is required" }, { status: 400 });
   }
 
+  const resolvedAgentId = agentId ?? (await selectAutoAgentId({
+    projectId: projectId ?? null,
+    title,
+    instructionsOverride: instructionsOverride ?? null,
+  }));
+
   const task = await db.task.create({
     data: {
       title,
-      agentId: agentId ?? null,
+      agentId: resolvedAgentId ?? null,
       templateId: templateId ?? null,
       dueAt: dueAt ? new Date(dueAt) : null,
       instructionsOverride: instructionsOverride ?? null,
@@ -116,11 +185,14 @@ export async function POST(req: NextRequest) {
   // Create CREATED event
   await db.taskEvent.create({
     data: {
-      taskId: task.id,
-      type: "CREATED",
-      message: projectId ? "Task created with project" : "Ad hoc task created",
-    },
-  });
+        taskId: task.id,
+        type: "CREATED",
+        message: resolvedAgentId
+          ? (projectId ? "Task created with project (auto-assigned agent)" : "Ad hoc task created (auto-assigned agent)")
+          : (projectId ? "Task created with project" : "Ad hoc task created"),
+        metadata: resolvedAgentId ? { resolvedAgentId } : undefined,
+      },
+    });
 
   return NextResponse.json(task, { status: 201 });
 }

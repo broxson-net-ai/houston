@@ -1,11 +1,14 @@
 -- Migration: Add Projects model and Task-Project relation
 
+-- CreateEnum
+CREATE TYPE "ProjectStatus" AS ENUM ('DRAFT', 'ACTIVE', 'PAUSED', 'DONE');
+
 -- Create projects table
 CREATE TABLE "projects" (
   "id" TEXT NOT NULL,
   "slug" TEXT NOT NULL UNIQUE,
   "title" TEXT NOT NULL,
-  "status" TEXT NOT NULL,
+  "status" "ProjectStatus" NOT NULL,
   "metadata" JSONB,
   "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
   "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -26,7 +29,7 @@ VALUES (
   'openclaw-dashboard',
   'openclaw-dashboard',
   'OpenClaw Dashboard',
-  'active',
+  'ACTIVE',
   '{"description": "Deploy Houston (mission control for OpenClaw agents) and extend with Projects management", "dependencies": ["OpenClaw Gateway", "Projects system"]}',
   CURRENT_TIMESTAMP,
   CURRENT_TIMESTAMP

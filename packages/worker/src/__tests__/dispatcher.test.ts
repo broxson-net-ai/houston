@@ -33,6 +33,12 @@ const mockDb = vi.hoisted(() => ({
     create: vi.fn(),
     update: vi.fn(),
   },
+  approvalAuditEvent: {
+    create: vi.fn(),
+  },
+  systemStatus: {
+    upsert: vi.fn(),
+  },
 }));
 
 vi.mock("@houston/shared", () => ({
