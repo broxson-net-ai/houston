@@ -157,7 +157,7 @@ export async function POST(req: NextRequest) {
   if (authError) return authError;
 
   const body = await req.json();
-  const { title, agentId, templateId, dueAt, instructionsOverride, projectId } = body;
+  const { title, agentId, templateId, dueAt, instructionsOverride, projectId, autoDispatch, dependencyTaskIds } = body;
 
   if (!title || typeof title !== "string") {
     return NextResponse.json({ error: "title is required" }, { status: 400 });
@@ -169,17 +169,36 @@ export async function POST(req: NextRequest) {
     instructionsOverride: instructionsOverride ?? null,
   }));
 
-  const task = await db.task.create({
-    data: {
-      title,
-      agentId: resolvedAgentId ?? null,
-      templateId: templateId ?? null,
-      dueAt: dueAt ? new Date(dueAt) : null,
-      instructionsOverride: instructionsOverride ?? null,
-      projectId: projectId ?? null,
-      status: TaskStatus.QUEUE,
-    },
-    include: { agent: true, template: true, project: true },
+  const normalizedDependencyTaskIds = Array.isArray(dependencyTaskIds)
+    ? dependencyTaskIds.filter((value: unknown): value is string => typeof value === "string" && value.length > 0)
+    : [];
+
+  const task = await db.$transaction(async (tx) => {
+    const created = await tx.task.create({
+      data: {
+        title,
+        agentId: resolvedAgentId ?? null,
+        templateId: templateId ?? null,
+        dueAt: dueAt ? new Date(dueAt) : null,
+        instructionsOverride: instructionsOverride ?? null,
+        projectId: projectId ?? null,
+        status: TaskStatus.QUEUE,
+        autoDispatch: autoDispatch === true,
+      },
+      include: { agent: true, template: true, project: true },
+    });
+
+    if (normalizedDependencyTaskIds.length > 0) {
+      await tx.taskDependency.createMany({
+        data: normalizedDependencyTaskIds.map((dependsOnTaskId: string) => ({
+          taskId: created.id,
+          dependsOnTaskId,
+        })),
+        skipDuplicates: true,
+      });
+    }
+
+    return created;
   });
 
   // Create CREATED event
@@ -190,7 +209,14 @@ export async function POST(req: NextRequest) {
         message: resolvedAgentId
           ? (projectId ? "Task created with project (auto-assigned agent)" : "Ad hoc task created (auto-assigned agent)")
           : (projectId ? "Task created with project" : "Ad hoc task created"),
-        metadata: resolvedAgentId ? { resolvedAgentId } : undefined,
+        metadata:
+          resolvedAgentId || autoDispatch === true || normalizedDependencyTaskIds.length > 0
+            ? {
+                ...(resolvedAgentId ? { resolvedAgentId } : {}),
+                autoDispatch: autoDispatch === true,
+                dependencyTaskIds: normalizedDependencyTaskIds,
+              }
+            : undefined,
       },
     });
 

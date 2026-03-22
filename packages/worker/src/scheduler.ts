@@ -1,5 +1,5 @@
 import PgBoss from "pg-boss";
-import { db } from "@houston/shared";
+import { db, TaskStatus, TaskRunStatus } from "@houston/shared";
 import cronParser from "cron-parser";
 import { DispatchService, DispatchJobData, DispatchTaskJobData } from "./dispatcher.js";
 import os from "os";
@@ -38,6 +38,10 @@ const APPROVAL_AUDIT_ROTATE_BATCH_SIZE = parseInt(
 const APPROVAL_AUDIT_ARCHIVE_DIR =
   process.env.HOUSTON_APPROVAL_AUDIT_ARCHIVE_DIR ??
   path.join(os.homedir(), ".openclaw", "workspace", "state", "approval-audit-archive");
+const STALE_ACCEPTED_MINUTES = parseInt(
+  process.env.HOUSTON_STALE_ACCEPTED_MINUTES ?? "30",
+  10
+);
 
 export type ScheduleRow = {
   id: string;
@@ -127,6 +131,14 @@ export class HoustonScheduler {
 
   async tick(): Promise<void> {
     const now = new Date();
+
+    try {
+      await this.recoverStaleAcceptedRuns();
+    } catch (err) {
+      const errorText = err instanceof Error ? err.message : String(err);
+      console.error(`[scheduler] Failed stale-run recovery: ${errorText}`);
+    }
+
     const enabledSchedules = await db.schedule.findMany({
       where: { enabled: true },
     });
@@ -156,10 +168,122 @@ export class HoustonScheduler {
     }
 
     try {
+      await this.dispatchReadyAutoTasks();
+    } catch (err) {
+      const errorText = err instanceof Error ? err.message : String(err);
+      console.error(`[scheduler] Failed auto-dispatch pass: ${errorText}`);
+    }
+
+    try {
       await this.updateSystemStatus();
     } catch (err) {
       const errorText = err instanceof Error ? err.message : String(err);
       console.error(`[scheduler] Failed to update system status: ${errorText}`);
+    }
+  }
+
+  private async dispatchReadyAutoTasks(): Promise<void> {
+    if (!this.boss) return;
+
+    const queueTasks = await db.task.findMany({
+      where: {
+        status: TaskStatus.QUEUE,
+        autoDispatch: true,
+        archivedAt: null,
+      },
+      include: {
+        taskRuns: {
+          orderBy: { createdAt: "desc" },
+          take: 1,
+        },
+        dependencies: {
+          include: {
+            dependsOnTask: {
+              select: { id: true, status: true },
+            },
+          },
+        },
+      },
+      orderBy: { createdAt: "asc" },
+      take: 200,
+    });
+
+    for (const task of queueTasks) {
+      const latestRun = task.taskRuns[0] ?? null;
+      if (latestRun && (latestRun.status === TaskRunStatus.ACCEPTED || latestRun.status === TaskRunStatus.RUNNING)) {
+        continue;
+      }
+
+      const deps = task.dependencies ?? [];
+      const blocked = deps.some((dep) => dep.dependsOnTask?.status !== TaskStatus.DONE);
+      if (blocked) continue;
+
+      await this.boss.send("dispatch-task", {
+        taskId: task.id,
+        reason: deps.length > 0 ? "dependency-ready" : "auto-dispatch",
+      });
+
+      await db.taskEvent.create({
+        data: {
+          taskId: task.id,
+          type: "QUEUED",
+          message: deps.length > 0
+            ? "Dependencies satisfied; auto-dispatch enqueued"
+            : "Auto-dispatch enqueued",
+          metadata: {
+            autoDispatch: true,
+            dependencyCount: deps.length,
+          },
+        },
+      });
+    }
+  }
+
+  private async recoverStaleAcceptedRuns(): Promise<void> {
+    if (STALE_ACCEPTED_MINUTES <= 0) return;
+    const staleBefore = new Date(Date.now() - STALE_ACCEPTED_MINUTES * 60 * 1000);
+
+    const staleRuns = await db.taskRun.findMany({
+      where: {
+        status: TaskRunStatus.ACCEPTED,
+        startedAt: null,
+        createdAt: { lt: staleBefore },
+      },
+      include: {
+        task: true,
+      },
+      take: 200,
+    });
+
+    for (const run of staleRuns) {
+      await db.taskRun.update({
+        where: { id: run.id },
+        data: {
+          status: TaskRunStatus.FAILED,
+          finishedAt: new Date(),
+          errorText: `stale accepted run recovered after ${STALE_ACCEPTED_MINUTES}m timeout`,
+        },
+      });
+
+      if (run.taskId) {
+        await db.task.update({
+          where: { id: run.taskId },
+          data: { status: TaskStatus.QUEUE },
+        });
+
+        await db.taskEvent.create({
+          data: {
+            taskId: run.taskId,
+            taskRunId: run.id,
+            type: "FAILED",
+            message: `Recovered stale ACCEPTED run after ${STALE_ACCEPTED_MINUTES}m`,
+            metadata: {
+              staleAcceptedRecovery: true,
+              staleMinutes: STALE_ACCEPTED_MINUTES,
+            },
+          },
+        });
+      }
     }
   }
 

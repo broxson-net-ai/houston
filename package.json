@@ -15,7 +15,10 @@
     "db:seed": "npm run db:seed -w packages/shared",
     "db:generate": "npm run db:generate -w packages/shared",
     "projects:auto-tag": "node scripts/auto-tag-templates.mjs",
-    "approval-audit:backfill": "node scripts/backfill-approval-audit-events.mjs"
+    "approval-audit:backfill": "node scripts/backfill-approval-audit-events.mjs",
+    "taskdeps:seed:v2": "node scripts/seed-v2-task-dependencies.mjs",
+    "service:install": "./scripts/install-houston-launchagent.sh",
+    "service:uninstall": "./scripts/uninstall-houston-launchagent.sh"
   },
   "devDependencies": {
     "@types/sanitize-html": "^2.16.0",

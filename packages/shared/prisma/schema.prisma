@@ -137,6 +137,7 @@ model Task {
   agent                        Agent?      @relation(fields: [agentId], references: [id])
   dueAt                        DateTime?
   status                       TaskStatus  @default(QUEUE)
+  autoDispatch                 Boolean     @default(false)
   projectId                    String?
   project                      Project?     @relation(fields: [projectId], references: [id])
   instructionsOverride         String?
@@ -147,8 +148,25 @@ model Task {
   updatedAt                    DateTime    @updatedAt
   taskRuns                     TaskRun[]
   taskEvents                   TaskEvent[]
+  dependencies                 TaskDependency[] @relation("TaskDependencies")
+  dependedBy                   TaskDependency[] @relation("TaskDependents")
 
   @@map("tasks")
+}
+
+model TaskDependency {
+  id              String   @id @default(cuid())
+  taskId          String
+  dependsOnTaskId String
+  createdAt       DateTime @default(now())
+
+  task            Task     @relation("TaskDependencies", fields: [taskId], references: [id], onDelete: Cascade)
+  dependsOnTask   Task     @relation("TaskDependents", fields: [dependsOnTaskId], references: [id], onDelete: Cascade)
+
+  @@unique([taskId, dependsOnTaskId])
+  @@index([taskId])
+  @@index([dependsOnTaskId])
+  @@map("task_dependencies")
 }
 
 model TaskRun {
