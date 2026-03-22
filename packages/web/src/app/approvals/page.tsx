@@ -68,6 +68,46 @@ type TrustVerification = {
   flaggedCriticalAuto: Array<{ trigger: string; autoApproved: number }>;
 };
 
+type ApprovalAuditHealth = {
+  checkedAt: string;
+  maxLagMinutes: number;
+  lagMinutes: number;
+  stale: boolean;
+  latestApproval?: { requestId: string; createdAt: string } | null;
+  latestAudit?: { requestId: string; createdAt: string } | null;
+};
+
+type ApprovalAuditSpike = {
+  checkedAt: string;
+  windowHours: number;
+  sampleCount: number;
+  autoCount: number;
+  autoRatio: number;
+  prevRatio: number;
+  ratioDelta: number;
+  flagged: boolean;
+};
+
+type ApprovalAuditRotation = {
+  ranAt: string;
+  rotateDays: number;
+  rotated: number;
+  deleted: number;
+  files: number;
+};
+
+type ApprovalAuditEvent = {
+  id: string;
+  requestId: string;
+  role: string;
+  trigger: string;
+  decision: "REQUESTED" | "APPROVED" | "DENIED" | "REVISED" | "EXPIRED" | "CANCELLED" | "EXECUTED";
+  decisionPath: "MANUAL" | "POLICY_AUTO" | "SYSTEM";
+  deciderType: string;
+  summary: string;
+  createdAt: string;
+};
+
 export default function ApprovalsPage() {
   const [requests, setRequests] = useState<ApprovalRequest[]>([]);
   const [filter, setFilter] = useState<"PENDING" | "APPROVED" | "DENIED" | "REVISED" | "ALL">("PENDING");
@@ -75,21 +115,35 @@ export default function ApprovalsPage() {
   const [triggerFilter, setTriggerFilter] = useState<string>("ALL");
   const [summary, setSummary] = useState<ApprovalSummary | null>(null);
   const [trustHealth, setTrustHealth] = useState<TrustVerification | null>(null);
+  const [auditHealth, setAuditHealth] = useState<ApprovalAuditHealth | null>(null);
+  const [auditSpike, setAuditSpike] = useState<ApprovalAuditSpike | null>(null);
+  const [auditRotation, setAuditRotation] = useState<ApprovalAuditRotation | null>(null);
+  const [auditRotationError, setAuditRotationError] = useState<Record<string, unknown> | null>(null);
+  const [auditEvents, setAuditEvents] = useState<ApprovalAuditEvent[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [actionReason, setActionReason] = useState("");
   const [revisionText, setRevisionText] = useState("");
   const [error, setError] = useState("");
 
   async function loadRequests() {
-    const [approvalsRes, trustRes] = await Promise.all([
+    const [approvalsRes, trustRes, auditRes, auditHealthRes] = await Promise.all([
       fetch(`/api/approvals?decision=${filter}&trust=${trustFilter}&trigger=${encodeURIComponent(triggerFilter)}&includeSummary=1&windowHours=48`),
       fetch("/api/system/trust"),
+      fetch(`/api/approvals/audit?take=100&trigger=${encodeURIComponent(triggerFilter)}`),
+      fetch("/api/system/approval-audit"),
     ]);
     const data = await approvalsRes.json();
     const trustData = await trustRes.json();
+    const auditData = await auditRes.json();
+    const auditHealthData = await auditHealthRes.json();
     setRequests(data.requests ?? []);
     setSummary(data.summary ?? null);
     setTrustHealth(trustData.value ?? null);
+    setAuditEvents(auditData.events ?? []);
+    setAuditHealth(auditHealthData.health ?? null);
+    setAuditSpike(auditHealthData.spike ?? null);
+    setAuditRotation(auditHealthData.rotation ?? null);
+    setAuditRotationError(auditHealthData.rotationError ?? null);
   }
 
   useEffect(() => {
@@ -170,6 +224,20 @@ export default function ApprovalsPage() {
         <div className="flex items-center justify-between">
           <h1 className="text-2xl font-bold">Approvals</h1>
           <div className="flex flex-col items-end gap-2">
+            <div className="flex gap-2">
+              <a
+                href={`/api/approvals/audit?take=500&trigger=${encodeURIComponent(triggerFilter)}&format=jsonl`}
+                className="px-3 py-1.5 text-xs rounded-md border"
+              >
+                Export JSONL
+              </a>
+              <a
+                href={`/api/approvals/audit?take=500&trigger=${encodeURIComponent(triggerFilter)}&format=csv`}
+                className="px-3 py-1.5 text-xs rounded-md border"
+              >
+                Export CSV
+              </a>
+            </div>
             <div className="flex gap-2">
               {(["PENDING", "APPROVED", "DENIED", "REVISED", "ALL"] as const).map((f) => (
                 <button
@@ -321,6 +389,67 @@ export default function ApprovalsPage() {
           </div>
         )}
 
+        {auditHealth && (
+          <div className="border rounded-lg p-3 space-y-2">
+            <div className="flex items-center justify-between">
+              <h2 className="font-semibold">Approval Audit Stream Health</h2>
+              <span className={`text-xs px-2 py-0.5 rounded-full ${
+                auditHealth.stale ? "bg-red-100 text-red-800" : "bg-green-100 text-green-800"
+              }`}>
+                {auditHealth.stale ? "Lagging" : "Healthy"}
+              </span>
+            </div>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-xs">
+              <div className="border rounded p-2">
+                <div className="text-muted-foreground">Last check</div>
+                <div>{new Date(auditHealth.checkedAt).toLocaleString()}</div>
+              </div>
+              <div className="border rounded p-2">
+                <div className="text-muted-foreground">Lag</div>
+                <div>{auditHealth.lagMinutes}m / {auditHealth.maxLagMinutes}m</div>
+              </div>
+              <div className="border rounded p-2">
+                <div className="text-muted-foreground">Latest approval</div>
+                <div className="truncate">{auditHealth.latestApproval?.requestId ?? "-"}</div>
+              </div>
+              <div className="border rounded p-2">
+                <div className="text-muted-foreground">Latest audit</div>
+                <div className="truncate">{auditHealth.latestAudit?.requestId ?? "-"}</div>
+              </div>
+            </div>
+            {auditSpike && (
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-xs">
+                <div className="border rounded p-2">
+                  <div className="text-muted-foreground">Auto ratio</div>
+                  <div>{(auditSpike.autoRatio * 100).toFixed(1)}%</div>
+                </div>
+                <div className="border rounded p-2">
+                  <div className="text-muted-foreground">Prev ratio</div>
+                  <div>{(auditSpike.prevRatio * 100).toFixed(1)}%</div>
+                </div>
+                <div className="border rounded p-2">
+                  <div className="text-muted-foreground">Delta</div>
+                  <div>{(auditSpike.ratioDelta * 100).toFixed(1)}%</div>
+                </div>
+                <div className="border rounded p-2">
+                  <div className="text-muted-foreground">Samples</div>
+                  <div>{auditSpike.sampleCount}</div>
+                </div>
+              </div>
+            )}
+            {auditRotation && (
+              <div className="text-xs text-muted-foreground">
+                Last rotation: {new Date(auditRotation.ranAt).toLocaleString()} · rotated {auditRotation.rotated} events into {auditRotation.files} file(s)
+              </div>
+            )}
+            {auditRotationError && (
+              <div className="text-xs text-red-700 bg-red-50 border border-red-200 rounded p-2">
+                Rotation error present in system status. Check `approval_audit_rotation_error`.
+              </div>
+            )}
+          </div>
+        )}
+
         {summary && summary.byTrigger.length > 0 && (
           <div className="border rounded-lg overflow-hidden">
             <div className="px-3 py-2 border-b bg-muted text-xs font-medium">Trigger Trust Breakdown (last {summary.windowHours}h)</div>
@@ -353,6 +482,36 @@ export default function ApprovalsPage() {
                     <td className="p-2">{row.pending}</td>
                     <td className="p-2">{row.denied}</td>
                     <td className="p-2">{row.revised}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        {auditEvents.length > 0 && (
+          <div className="border rounded-lg overflow-hidden">
+            <div className="px-3 py-2 border-b bg-muted text-xs font-medium">Approval Audit Timeline (latest 100)</div>
+            <table className="w-full text-xs">
+              <thead className="bg-muted/60">
+                <tr>
+                  <th className="text-left p-2 font-medium">Time</th>
+                  <th className="text-left p-2 font-medium">Decision</th>
+                  <th className="text-left p-2 font-medium">Path</th>
+                  <th className="text-left p-2 font-medium">Role</th>
+                  <th className="text-left p-2 font-medium">Trigger</th>
+                  <th className="text-left p-2 font-medium">Summary</th>
+                </tr>
+              </thead>
+              <tbody>
+                {auditEvents.map((event) => (
+                  <tr key={event.id} className="border-t">
+                    <td className="p-2 text-muted-foreground">{new Date(event.createdAt).toLocaleString()}</td>
+                    <td className="p-2">{event.decision}</td>
+                    <td className="p-2">{event.decisionPath}</td>
+                    <td className="p-2 font-mono">{event.role}</td>
+                    <td className="p-2">{event.trigger}</td>
+                    <td className="p-2">{event.summary}</td>
                   </tr>
                 ))}
               </tbody>

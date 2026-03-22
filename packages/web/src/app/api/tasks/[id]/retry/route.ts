@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db, TaskStatus } from "@houston/shared";
 import { requireAuth } from "@/lib/session";
+import { enqueueTaskDispatch } from "@/lib/queue";
 
 export async function POST(
   req: NextRequest,
@@ -26,12 +27,13 @@ export async function POST(
     );
   }
 
-  // Enqueue retry via pg-boss
+  await enqueueTaskDispatch(id, "manual-retry");
+
   await db.taskEvent.create({
     data: {
       taskId: id,
       type: "QUEUED",
-      message: "Retry requested",
+      message: "Retry requested and enqueued",
     },
   });
 

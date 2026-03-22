@@ -193,8 +193,123 @@ export type DispatchJobData = {
   dueAt: string; // ISO string
 };
 
+export type DispatchTaskJobData = {
+  taskId: string;
+  reason?: string;
+};
+
 export class DispatchService {
   constructor(private gatewayClient?: GatewayClient) {}
+
+  private extractLane(value: string | null | undefined): string | null {
+    if (!value) return null;
+    const m = value.match(/\bLane:\s*([A-E])\b/i);
+    return m?.[1]?.toUpperCase() ?? null;
+  }
+
+  private async writeApprovalAuditEvent(args: {
+    requestId: string;
+    taskRunId?: string | null;
+    taskId?: string | null;
+    projectId?: string | null;
+    lane?: string | null;
+    role: string;
+    trigger: string;
+    severity: "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
+    decision: "REQUESTED" | "APPROVED" | "DENIED" | "REVISED" | "EXPIRED" | "CANCELLED" | "EXECUTED";
+    decisionPath: "MANUAL" | "POLICY_AUTO" | "SYSTEM";
+    deciderType: string;
+    deciderId?: string | null;
+    autonomyTier?: string | null;
+    dataClass?: string | null;
+    summary: string;
+    evidenceRefs?: Record<string, unknown> | null;
+    decidedAt?: Date | null;
+    createdAt?: Date | null;
+    meta?: Record<string, unknown> | null;
+  }): Promise<void> {
+    try {
+      const latencyMs =
+        args.decidedAt && args.createdAt
+          ? Math.max(0, args.decidedAt.getTime() - args.createdAt.getTime())
+          : null;
+
+      await db.approvalAuditEvent.create({
+        data: {
+          eventId: uuidv4(),
+          requestId: args.requestId,
+          taskRunId: args.taskRunId ?? null,
+          taskId: args.taskId ?? null,
+          projectId: args.projectId ?? null,
+          lane: args.lane ?? null,
+          role: args.role,
+          trigger: args.trigger,
+          severity: args.severity,
+          decision: args.decision,
+          decisionPath: args.decisionPath,
+          deciderType: args.deciderType,
+          deciderId: args.deciderId ?? null,
+          autonomyTier: args.autonomyTier ?? null,
+          dataClass: args.dataClass ?? null,
+          summary: args.summary,
+          evidenceRefs: (args.evidenceRefs as any) ?? undefined,
+          decidedAt: args.decidedAt ?? null,
+          latencyMs,
+          meta: (args.meta as any) ?? undefined,
+        },
+      });
+    } catch (error) {
+      const errorText = error instanceof Error ? error.message : String(error);
+      console.warn(`[dispatcher] Failed to write approval audit event: ${errorText}`);
+      await db.systemStatus
+        .upsert({
+          where: { key: "approval_audit_last_write_error" },
+          create: {
+            key: "approval_audit_last_write_error",
+            value: {
+              at: new Date().toISOString(),
+              requestId: args.requestId,
+              taskRunId: args.taskRunId ?? null,
+              error: errorText,
+            },
+          },
+          update: {
+            value: {
+              at: new Date().toISOString(),
+              requestId: args.requestId,
+              taskRunId: args.taskRunId ?? null,
+              error: errorText,
+            },
+          },
+        })
+        .catch(() => null);
+    }
+  }
+
+  private async assembleTaskInstructions(task: {
+    templateId: string | null;
+    instructionsOverride: string | null;
+  }): Promise<{ assembled: string; preVersion: string | null }> {
+    if (task.templateId) {
+      return this.assembleInstructions(task.templateId, task.instructionsOverride ?? null);
+    }
+
+    const activePreInstr = await db.preInstructionsVersion.findFirst({ where: { isActive: true } });
+    const parts: string[] = [];
+
+    if (activePreInstr) {
+      parts.push("=== PRE-INSTRUCTIONS ===");
+      parts.push(activePreInstr.content);
+    }
+
+    parts.push("=== TASK INSTRUCTIONS ===");
+    parts.push(task.instructionsOverride?.trim() || "No template instructions provided.");
+
+    return {
+      assembled: parts.join("\n\n"),
+      preVersion: activePreInstr?.id ?? null,
+    };
+  }
 
   private async dispatchTaskRunToGateway(args: {
     task: { id: string; scheduleId: string | null; agentId: string | null };
@@ -481,6 +596,33 @@ export class DispatchService {
                 },
           });
 
+      if (!existingApproval) {
+        await this.writeApprovalAuditEvent({
+          requestId,
+          taskRunId: taskRun.id,
+          taskId: task.id,
+          projectId: task.projectId,
+          lane: this.extractLane(task.instructionsOverride ?? task.assembledInstructionsSnapshot),
+          role,
+          trigger: approvalTrigger,
+          severity: triggerSeverity(approvalTrigger),
+          decision: requiresApproval ? "REQUESTED" : "APPROVED",
+          decisionPath: requiresApproval ? "SYSTEM" : "POLICY_AUTO",
+          deciderType: requiresApproval ? "system:dispatcher" : "policy:trust-ladder",
+          deciderId: requiresApproval ? null : "policy:trust-ladder",
+          summary: requiresApproval
+            ? `Approval requested for task ${task.id}`
+            : `Approval auto-approved by trust mode '${triggerMode}' for task ${task.id}`,
+          evidenceRefs: {
+            trustMode: triggerMode,
+            approvalPattern: pattern,
+            intentSignature: signature,
+          },
+          decidedAt: requiresApproval ? null : approval.decidedAt,
+          createdAt: approval.createdAt,
+        });
+      }
+
       if (!requiresApproval) {
         await db.taskEvent.create({
           data: {
@@ -589,6 +731,282 @@ export class DispatchService {
     return;
   }
 
+  async dispatchTask(data: DispatchTaskJobData): Promise<void> {
+    const { taskId } = data;
+
+    const task = await db.task.findUnique({
+      where: { id: taskId },
+      include: {
+        template: true,
+        taskRuns: {
+          orderBy: { attemptNumber: "desc" },
+          take: 1,
+        },
+      },
+    });
+
+    if (!task) {
+      const errorText = `Task not found: ${taskId}`;
+      console.error(`[dispatcher] ${errorText}`);
+      throw new Error(errorText);
+    }
+
+    if (!task.agentId) {
+      const errorText = `Task has no agentId: ${taskId}`;
+      console.error(`[dispatcher] ${errorText}`);
+      throw new Error(errorText);
+    }
+
+    const agent = await db.agent.findUnique({ where: { id: task.agentId } });
+    if (!agent) {
+      const errorText = `Agent not found: ${task.agentId}`;
+      console.error(`[dispatcher] ${errorText}`);
+      throw new Error(errorText);
+    }
+
+    const latestRun = task.taskRuns[0] ?? null;
+    if (latestRun && (latestRun.status === TaskRunStatus.ACCEPTED || latestRun.status === TaskRunStatus.RUNNING)) {
+      console.log(`[dispatcher] Skipping dispatch; latest run still active for task ${taskId}`);
+      return;
+    }
+
+    const { assembled, preVersion } = await this.assembleTaskInstructions({
+      templateId: task.templateId,
+      instructionsOverride: task.instructionsOverride,
+    });
+
+    const role = deriveRoleFromRoutingKey(agent.routingKey);
+    const approvalTrigger = detectApprovalTrigger(role, assembled);
+    const triggerMode = approvalTrigger ? resolveTrustMode(role, approvalTrigger) : null;
+    const pattern = approvalTrigger ? approvalPattern(role, approvalTrigger, assembled) : null;
+    const signature = approvalTrigger ? intentSignature(approvalTrigger, assembled) : null;
+
+    const nextAttempt = latestRun ? latestRun.attemptNumber + 1 : 1;
+    const idempotencyKey = `manual:${task.id}:attempt:${nextAttempt}`;
+
+    const taskRun = await db.taskRun.create({
+      data: {
+        taskId: task.id,
+        attemptNumber: nextAttempt,
+        status: TaskRunStatus.ACCEPTED,
+        idempotencyKey,
+        dispatchedAt: new Date(),
+      },
+    });
+
+    await db.task.update({
+      where: { id: task.id },
+      data: {
+        status: TaskStatus.QUEUE,
+        assembledInstructionsSnapshot: assembled,
+        preInstructionsVersion: preVersion ?? undefined,
+      },
+    });
+
+    if (approvalTrigger) {
+      let requiresApproval = true;
+
+      if (triggerMode === "auto") {
+        requiresApproval = false;
+      } else if (triggerMode === "once-per-session" || triggerMode === "once-ever") {
+        const approvedHistory = await db.approvalRequest.findMany({
+          where: {
+            decision: "APPROVED",
+            role,
+            trigger: approvalTrigger,
+          },
+          orderBy: { decidedAt: "desc" },
+          take: 200,
+        });
+
+        const hasMatch = approvedHistory.some((item) => {
+          const ctx = parseContextObject(item.context);
+          const approvedPattern = typeof ctx.approvalPattern === "string" ? ctx.approvalPattern : null;
+          const approvedSignature = typeof ctx.intentSignature === "string" ? ctx.intentSignature : null;
+          if (approvedPattern !== pattern && approvedSignature !== signature) return false;
+          if (triggerMode === "once-ever") return true;
+          const approvedSessionId = typeof ctx.sessionId === "string" ? ctx.sessionId : null;
+          return approvedSessionId === agent.routingKey;
+        });
+
+        requiresApproval = !hasMatch;
+      }
+
+      const requestId = `approval:${taskRun.id}:${approvalTrigger}`;
+      const existingApproval = await db.approvalRequest.findUnique({ where: { requestId } });
+
+      const baseApprovalData = {
+        requestId,
+        role,
+        trigger: approvalTrigger,
+        severity: triggerSeverity(approvalTrigger),
+        intent: `Approval required before dispatching task ${task.id}`,
+        target: agent.routingKey,
+        risk: `Task instructions matched trigger '${approvalTrigger}' for role '${role}'.`,
+        rollback: "Do not dispatch task until approved.",
+        budget: {
+          toolCallsUsed: 0,
+          runtimeMinutes: 0,
+          previousApprovalsThisTask: 0,
+        },
+        context: {
+          taskId: task.id,
+          projectId: task.projectId,
+          sessionId: agent.routingKey,
+          approvalPattern: pattern,
+          intentSignature: signature,
+          trustMode: triggerMode,
+        },
+        taskRunId: taskRun.id,
+      };
+
+      const approval = existingApproval
+        ? existingApproval
+        : await db.approvalRequest.create({
+            data: requiresApproval
+              ? baseApprovalData
+              : {
+                  ...baseApprovalData,
+                  decision: "APPROVED",
+                  decider: "policy:trust-ladder",
+                  reason: `Auto-approved by trust mode '${triggerMode}'`,
+                  outcome: "auto-approved inline; dispatched",
+                  decidedAt: new Date(),
+                },
+          });
+
+      if (!existingApproval) {
+        await this.writeApprovalAuditEvent({
+          requestId,
+          taskRunId: taskRun.id,
+          taskId: task.id,
+          projectId: task.projectId,
+          lane: this.extractLane(task.instructionsOverride ?? task.assembledInstructionsSnapshot),
+          role,
+          trigger: approvalTrigger,
+          severity: triggerSeverity(approvalTrigger),
+          decision: requiresApproval ? "REQUESTED" : "APPROVED",
+          decisionPath: requiresApproval ? "SYSTEM" : "POLICY_AUTO",
+          deciderType: requiresApproval ? "system:dispatcher" : "policy:trust-ladder",
+          deciderId: requiresApproval ? null : "policy:trust-ladder",
+          summary: requiresApproval
+            ? `Approval requested for task ${task.id}`
+            : `Approval auto-approved by trust mode '${triggerMode}' for task ${task.id}`,
+          evidenceRefs: {
+            trustMode: triggerMode,
+            approvalPattern: pattern,
+            intentSignature: signature,
+          },
+          decidedAt: requiresApproval ? null : approval.decidedAt,
+          createdAt: approval.createdAt,
+        });
+      }
+
+      if (!requiresApproval) {
+        await db.taskEvent.create({
+          data: {
+            taskId: task.id,
+            taskRunId: taskRun.id,
+            scheduleId: task.scheduleId,
+            type: "STATUS_CHANGED",
+            message: `Approval auto-satisfied (${triggerMode}) before dispatch`,
+            metadata: {
+              approvalRequestId: approval.id,
+              trigger: approvalTrigger,
+              role,
+              templateId: task.templateId,
+              trustMode: triggerMode,
+              approvalPattern: pattern,
+              intentSignature: signature,
+            },
+          },
+        });
+
+        await db.taskRun.update({
+          where: { id: taskRun.id },
+          data: {
+            responsePayload: {
+              approvalPending: false,
+              approvalAutoSatisfied: true,
+              approvalRequestId: approval.id,
+              trigger: approvalTrigger,
+              trustMode: triggerMode,
+              approvalPattern: pattern,
+              intentSignature: signature,
+            },
+          },
+        });
+      }
+
+      if (requiresApproval) {
+        await db.taskEvent.create({
+          data: {
+            taskId: task.id,
+            taskRunId: taskRun.id,
+            scheduleId: task.scheduleId,
+            type: "QUEUED",
+            message: `Awaiting approval (${approvalTrigger}) before dispatch`,
+            metadata: {
+              approvalRequestId: approval.id,
+              trigger: approvalTrigger,
+              role,
+              templateId: task.templateId,
+              trustMode: triggerMode,
+              approvalPattern: pattern,
+              intentSignature: signature,
+            },
+          },
+        });
+
+        await db.taskRun.update({
+          where: { id: taskRun.id },
+          data: {
+            responsePayload: {
+              approvalPending: true,
+              approvalRequestId: approval.id,
+              trigger: approvalTrigger,
+              trustMode: triggerMode,
+              approvalPattern: pattern,
+              intentSignature: signature,
+            },
+          },
+        });
+
+        return;
+      }
+    }
+
+    const dispatchResult = await this.dispatchTaskRunToGateway({
+      task: { id: task.id, scheduleId: task.scheduleId, agentId: task.agentId },
+      taskRun: { id: taskRun.id, idempotencyKey: taskRun.idempotencyKey ?? idempotencyKey },
+      agent: { routingKey: agent.routingKey },
+      assembled,
+      templateId: task.templateId ?? "adhoc",
+    });
+
+    if (!dispatchResult.ok) {
+      const errorText = dispatchResult.errorText;
+      console.error(`[dispatcher] ${errorText} (taskId: ${task.id}, templateId: ${task.templateId ?? "adhoc"})`);
+      await db.taskRun.update({
+        where: { id: taskRun.id },
+        data: { status: TaskRunStatus.FAILED, errorText },
+      });
+      await db.task.update({
+        where: { id: task.id },
+        data: { status: TaskStatus.FAILED },
+      });
+      await db.taskEvent.create({
+        data: {
+          taskId: task.id,
+          taskRunId: taskRun.id,
+          type: "FAILED",
+          message: errorText,
+          metadata: { scheduleId: task.scheduleId, templateId: task.templateId ?? "adhoc" },
+        },
+      });
+    }
+  }
+
   async resumeApprovedRequests(limit = 25): Promise<void> {
     const approvals = await db.approvalRequest.findMany({
       where: {
@@ -668,6 +1086,24 @@ export class DispatchService {
         await db.approvalRequest.update({
           where: { id: approval.id },
           data: { outcome: `blocked: ${reasonText}` },
+        });
+
+        await this.writeApprovalAuditEvent({
+          requestId: approval.requestId,
+          taskRunId: taskRun.id,
+          taskId: taskRun.task.id,
+          projectId: taskRun.task.projectId,
+          lane: this.extractLane(taskRun.task.instructionsOverride ?? taskRun.task.assembledInstructionsSnapshot),
+          role: approval.role,
+          trigger: approval.trigger,
+          severity: approval.severity,
+          decision: "DENIED",
+          decisionPath: "MANUAL",
+          deciderType: approval.decider || "admin",
+          deciderId: approval.decider || null,
+          summary: `Approval denied and task blocked: ${reasonText}`,
+          decidedAt: approval.decidedAt,
+          createdAt: approval.createdAt,
         });
         continue;
       }
@@ -773,6 +1209,31 @@ export class DispatchService {
               ? `redispatched with revision ${dispatchResult.runId ?? "(no runId)"}`
               : `dispatched ${dispatchResult.runId ?? "(no runId)"}`,
         },
+      });
+
+      await this.writeApprovalAuditEvent({
+        requestId: approval.requestId,
+        taskRunId: taskRun.id,
+        taskId: taskRun.task.id,
+        projectId: taskRun.task.projectId,
+        lane: this.extractLane(taskRun.task.instructionsOverride ?? taskRun.task.assembledInstructionsSnapshot),
+        role: approval.role,
+        trigger: approval.trigger,
+        severity: approval.severity,
+        decision: "EXECUTED",
+        decisionPath: decision === "APPROVED" ? "MANUAL" : "SYSTEM",
+        deciderType: decision === "APPROVED" ? (approval.decider || "admin") : "system:dispatcher",
+        deciderId: approval.decider || null,
+        summary:
+          decision === "REVISED"
+            ? `Approval revised and redispatched (${dispatchResult.runId ?? "no-run-id"})`
+            : `Approval executed and dispatched (${dispatchResult.runId ?? "no-run-id"})`,
+        evidenceRefs: {
+          gatewayRunId: dispatchResult.runId,
+          taskRunId: taskRun.id,
+        },
+        decidedAt: approval.decidedAt,
+        createdAt: approval.createdAt,
       });
     }
   }

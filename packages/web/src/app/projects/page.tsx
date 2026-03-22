@@ -1,5 +1,6 @@
 import { listProjectsWithCounts } from "@/lib/projects";
 import { getPortfolioExecutionBoard } from "@/lib/portfolio-execution";
+import { getPortfolioExecutionProgress } from "@/lib/portfolio-progress";
 import { Nav } from "@/components/nav";
 import ProjectsView from "./ProjectsView";
 import PortfolioExecutionBoardCard from "./PortfolioExecutionBoard";
@@ -8,6 +9,9 @@ import Link from "next/link";
 export default async function ProjectsPage() {
   const projects = await listProjectsWithCounts();
   const portfolioBoard = getPortfolioExecutionBoard();
+  const progress = portfolioBoard
+    ? await getPortfolioExecutionProgress(portfolioBoard.gates.map((gate) => gate.title))
+    : null;
 
   return (
     <div className="min-h-screen bg-background">
@@ -27,7 +31,7 @@ export default async function ProjectsPage() {
             + New Project
           </Link>
         </div>
-        {portfolioBoard ? <PortfolioExecutionBoardCard board={portfolioBoard} /> : null}
+        {portfolioBoard ? <PortfolioExecutionBoardCard board={portfolioBoard} progress={progress} /> : null}
         <ProjectsView projects={projects} />
       </div>
     </div>

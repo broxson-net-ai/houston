@@ -1,7 +1,7 @@
 -- Migration: Add Projects model and Task-Project relation
 
--- Create Project table
-CREATE TABLE "Project" (
+-- Create projects table
+CREATE TABLE "projects" (
   "id" TEXT NOT NULL,
   "slug" TEXT NOT NULL UNIQUE,
   "title" TEXT NOT NULL,
@@ -10,18 +10,18 @@ CREATE TABLE "Project" (
   "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
   "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
-  CONSTRAINT "Project_pkey" PRIMARY KEY ("id")
+  CONSTRAINT "projects_pkey" PRIMARY KEY ("id")
 );
 
--- Add projectId column to Task table
-ALTER TABLE "Task" ADD COLUMN "projectId" TEXT;
+-- Add projectId column to tasks table
+ALTER TABLE "tasks" ADD COLUMN "projectId" TEXT;
 
 -- Create index on projectId for efficient lookups
-CREATE INDEX "Task_projectId_idx" ON "Task"("projectId");
+CREATE INDEX "tasks_projectId_idx" ON "tasks"("projectId");
 
 -- Insert default values for PROJECTS.md registry
 -- This ensures the Projects registry is accessible via the API
-INSERT INTO "Project" ("id", "slug", "title", "status", "metadata", "createdAt", "updatedAt")
+INSERT INTO "projects" ("id", "slug", "title", "status", "metadata", "createdAt", "updatedAt")
 VALUES (
   'openclaw-dashboard',
   'openclaw-dashboard',

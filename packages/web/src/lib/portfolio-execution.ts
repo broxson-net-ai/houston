@@ -4,26 +4,33 @@ import fs from "fs";
 import os from "os";
 import path from "path";
 
-export type PortfolioExecutionTodo = {
-  label: string;
-  done: boolean;
+export type PortfolioLane = {
+  title: string;
+  projects: string[];
+  goal: string[];
 };
 
-export type PortfolioExecutionTrack = {
+export type PortfolioGate = {
   title: string;
-  todos: PortfolioExecutionTodo[];
-  doneWhen: PortfolioExecutionTodo[];
+  mustPass: string[];
+  owners: string[];
+};
+
+export type PortfolioExecutionQueue = {
+  now: string[];
+  next: string[];
+  later: string[];
 };
 
 export type PortfolioExecutionBoard = {
   status?: string;
   owner?: string;
   lastUpdated?: string;
-  criticalPath: string[];
-  parallelTracks: string[];
-  rules: string[];
-  tracks: PortfolioExecutionTrack[];
-  newAgents: PortfolioExecutionTodo[];
+  constraints: string[];
+  conflictMap: string[];
+  lanes: PortfolioLane[];
+  gates: PortfolioGate[];
+  queue: PortfolioExecutionQueue;
   sourcePath: string;
   mtimeMs?: number;
 };
@@ -45,9 +52,13 @@ function parseMeta(contents: string, label: string) {
   return match?.[1]?.trim();
 }
 
-function sectionLines(contents: string, heading: string) {
+function sectionLinesByPrefix(contents: string, headingPrefix: string) {
   const lines = contents.split(/\r?\n/);
-  const start = lines.findIndex((line) => new RegExp(`^##\\s+${heading}$`, "i").test(line.trim()));
+  const target = headingPrefix.trim().toLowerCase();
+  const start = lines.findIndex((line) => {
+    const t = line.trim().toLowerCase();
+    return t.startsWith("## ") && t.includes(target);
+  });
   if (start === -1) return [] as string[];
   const out: string[] = [];
   for (let i = start + 1; i < lines.length; i += 1) {
@@ -71,57 +82,137 @@ function parseSimpleList(lines: string[]) {
     .filter(Boolean);
 }
 
-function parseCheckboxLine(line: string) {
-  const match = line.trim().match(/^-\s+\[(x|X|\s)\]\s+(.+)$/);
-  if (!match) return null;
-  return {
-    done: match[1].toLowerCase() === "x",
-    label: match[2].trim(),
-  } satisfies PortfolioExecutionTodo;
-}
-
-function parseTrackSections(contents: string) {
-  const lines = contents.split(/\r?\n/);
-  const tracks: PortfolioExecutionTrack[] = [];
+function parseLanes(contents: string): PortfolioLane[] {
+  const lines = sectionLinesByPrefix(contents, "4) portfolio lanes and project ownership");
+  const lanes: PortfolioLane[] = [];
   let i = 0;
 
   while (i < lines.length) {
-    const heading = lines[i].trim().match(/^###\s+Track\s+\d+\s*:\s+(.+)$/i);
+    const heading = lines[i].trim().match(/^###\s+(.+)$/);
     if (!heading) {
       i += 1;
       continue;
     }
 
     const title = heading[1].trim();
-    const todos: PortfolioExecutionTodo[] = [];
-    const doneWhen: PortfolioExecutionTodo[] = [];
-    let inDoneWhen = false;
+    const block: string[] = [];
     i += 1;
-
     while (i < lines.length) {
       const current = lines[i].trim();
-      if (/^###\s+/.test(current) || /^##\s+New agents to create$/i.test(current)) break;
-      if (/^Done when:/i.test(current)) {
-        inDoneWhen = true;
-        i += 1;
-        continue;
-      }
-
-      const checkbox = parseCheckboxLine(lines[i]);
-      if (checkbox) {
-        if (inDoneWhen) {
-          doneWhen.push(checkbox);
-        } else {
-          todos.push(checkbox);
-        }
-      }
+      if (/^###\s+/.test(current)) break;
+      block.push(lines[i]);
       i += 1;
     }
 
-    tracks.push({ title, todos, doneWhen });
+    const projects: string[] = [];
+    const goal: string[] = [];
+    let inProjects = false;
+    let inGoal = false;
+
+    for (const raw of block) {
+      const line = raw.trim();
+      if (!line) continue;
+      if (/^Projects:\s*$/i.test(line)) {
+        inProjects = true;
+        inGoal = false;
+        continue;
+      }
+      if (/^Goal:\s*$/i.test(line)) {
+        inProjects = false;
+        inGoal = true;
+        continue;
+      }
+      const bullet = line.match(/^-\s+(.+)$/);
+      if (bullet) {
+        if (inProjects) projects.push(bullet[1].trim());
+        else if (inGoal) goal.push(bullet[1].trim());
+      }
+    }
+
+    lanes.push({ title, projects, goal });
   }
 
-  return tracks;
+  return lanes;
+}
+
+function parseGates(contents: string): PortfolioGate[] {
+  const lines = sectionLinesByPrefix(contents, "5) stage gates");
+  const gates: PortfolioGate[] = [];
+  let i = 0;
+
+  while (i < lines.length) {
+    const heading = lines[i].trim().match(/^###\s+(.+)$/);
+    if (!heading) {
+      i += 1;
+      continue;
+    }
+
+    const title = heading[1].trim();
+    const block: string[] = [];
+    i += 1;
+    while (i < lines.length) {
+      const current = lines[i].trim();
+      if (/^###\s+/.test(current)) break;
+      block.push(lines[i]);
+      i += 1;
+    }
+
+    const mustPass: string[] = [];
+    const owners: string[] = [];
+    let inMustPass = false;
+    let inOwners = false;
+
+    for (const raw of block) {
+      const line = raw.trim();
+      if (!line) continue;
+      if (/^Must pass:\s*$/i.test(line)) {
+        inMustPass = true;
+        inOwners = false;
+        continue;
+      }
+      if (/^Primary owners:\s*$/i.test(line)) {
+        inMustPass = false;
+        inOwners = true;
+        continue;
+      }
+      const bullet = line.match(/^-\s+(.+)$/);
+      if (bullet) {
+        if (inMustPass) mustPass.push(bullet[1].trim());
+        else if (inOwners) owners.push(bullet[1].trim());
+      }
+    }
+
+    gates.push({ title, mustPass, owners });
+  }
+
+  return gates;
+}
+
+function parseQueue(contents: string): PortfolioExecutionQueue {
+  const lines = sectionLinesByPrefix(contents, "6) now / next / later board");
+  const buckets: PortfolioExecutionQueue = { now: [], next: [], later: [] };
+
+  let current: keyof PortfolioExecutionQueue | null = null;
+  for (const raw of lines) {
+    const line = raw.trim();
+    if (!line) continue;
+    if (/^###\s+Now/i.test(line)) {
+      current = "now";
+      continue;
+    }
+    if (/^###\s+Next/i.test(line)) {
+      current = "next";
+      continue;
+    }
+    if (/^###\s+Later/i.test(line)) {
+      current = "later";
+      continue;
+    }
+    const item = line.match(/^\d+\.\s+(.+)$/) || line.match(/^[-*]\s+(.+)$/);
+    if (item && current) buckets[current].push(item[1].trim());
+  }
+
+  return buckets;
 }
 
 export function getPortfolioExecutionBoard(): PortfolioExecutionBoard | null {
@@ -130,23 +221,21 @@ export function getPortfolioExecutionBoard(): PortfolioExecutionBoard | null {
   const contents = fs.readFileSync(BOARD_PATH, "utf8");
   const stat = fs.statSync(BOARD_PATH);
 
-  const criticalPath = parseSimpleList(sectionLines(contents, "Critical path"));
-  const parallelTracks = parseSimpleList(sectionLines(contents, "Parallel tracks"));
-  const rules = parseSimpleList(sectionLines(contents, "Portfolio execution rules"));
-
-  const newAgents = sectionLines(contents, "New agents to create")
-    .map(parseCheckboxLine)
-    .filter((item): item is PortfolioExecutionTodo => Boolean(item));
+  const constraints = parseSimpleList(sectionLinesByPrefix(contents, "1) non-negotiable constraints"));
+  const conflictMap = parseSimpleList(sectionLinesByPrefix(contents, "3) conflict and duplicate resolution map"));
+  const lanes = parseLanes(contents);
+  const gates = parseGates(contents);
+  const queue = parseQueue(contents);
 
   return {
     status: parseMeta(contents, "Status"),
     owner: parseMeta(contents, "Owner"),
     lastUpdated: parseMeta(contents, "Last updated"),
-    criticalPath,
-    parallelTracks,
-    rules,
-    tracks: parseTrackSections(contents),
-    newAgents,
+    constraints,
+    conflictMap,
+    lanes,
+    gates,
+    queue,
     sourcePath: BOARD_PATH,
     mtimeMs: stat.mtimeMs,
   };

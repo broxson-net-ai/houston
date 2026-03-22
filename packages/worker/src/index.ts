@@ -17,6 +17,12 @@ const TRUST_VERIFY_WINDOW_HOURS = Number(process.env.HOUSTON_TRUST_VERIFY_WINDOW
 const OPS_ALERT_WEBHOOK_URL = process.env.HOUSTON_OPS_ALERT_WEBHOOK_URL ?? "";
 const OPS_ALERT_MIN_INTERVAL_MS = Number(process.env.HOUSTON_OPS_ALERT_MIN_INTERVAL_MS ?? "900000");
 const TRUST_LAST_ALERT_KEY = "trust_ladder_last_alert";
+const APPROVAL_AUDIT_HEALTH_INTERVAL_MS = Number(process.env.HOUSTON_APPROVAL_AUDIT_HEALTH_INTERVAL_MS ?? "300000");
+const APPROVAL_AUDIT_MAX_LAG_MINUTES = Number(process.env.HOUSTON_APPROVAL_AUDIT_MAX_LAG_MINUTES ?? "10");
+const APPROVAL_AUDIT_SPIKE_WINDOW_HOURS = Number(process.env.HOUSTON_APPROVAL_AUDIT_SPIKE_WINDOW_HOURS ?? "24");
+const APPROVAL_AUDIT_SPIKE_MIN_SAMPLES = Number(process.env.HOUSTON_APPROVAL_AUDIT_SPIKE_MIN_SAMPLES ?? "10");
+const APPROVAL_AUDIT_AUTO_SPIKE_RATIO = Number(process.env.HOUSTON_APPROVAL_AUDIT_AUTO_SPIKE_RATIO ?? "0.75");
+const APPROVAL_AUDIT_AUTO_SPIKE_DELTA = Number(process.env.HOUSTON_APPROVAL_AUDIT_AUTO_SPIKE_DELTA ?? "0.25");
 
 function parseTrustModes(): Record<string, string> {
   const raw = process.env.HOUSTON_APPROVAL_TRUST_MODES;
@@ -102,6 +108,7 @@ async function main() {
   const dispatchService = new DispatchService(gatewayClient);
   let approvalResumeTimer: ReturnType<typeof setInterval> | null = null;
   let trustVerifyTimer: ReturnType<typeof setInterval> | null = null;
+  let approvalAuditHealthTimer: ReturnType<typeof setInterval> | null = null;
 
   const sendOpsAlert = async (kind: string, message: string, details: Record<string, unknown>) => {
     if (!OPS_ALERT_WEBHOOK_URL) return;
@@ -257,6 +264,130 @@ async function main() {
     }
   };
 
+  const runApprovalAuditHealthCheck = async () => {
+    const latestApproval = await db.approvalRequest.findFirst({
+      orderBy: { createdAt: "desc" },
+      select: { id: true, requestId: true, createdAt: true },
+    });
+
+    const latestAudit = await db.approvalAuditEvent.findFirst({
+      orderBy: { createdAt: "desc" },
+      select: { id: true, requestId: true, createdAt: true },
+    });
+
+    const lastWriteError = await db.systemStatus.findUnique({ where: { key: "approval_audit_last_write_error" } });
+    const rotationError = await db.systemStatus.findUnique({ where: { key: "approval_audit_rotation_error" } });
+
+    const lagMs = latestApproval
+      ? Math.max(0, latestApproval.createdAt.getTime() - (latestAudit?.createdAt?.getTime() ?? 0))
+      : 0;
+    const lagMinutes = Math.round(lagMs / 60000);
+    const stale = lagMinutes > Math.max(1, APPROVAL_AUDIT_MAX_LAG_MINUTES);
+
+    const status = {
+      checkedAt: new Date().toISOString(),
+      maxLagMinutes: APPROVAL_AUDIT_MAX_LAG_MINUTES,
+      lagMinutes,
+      stale,
+      latestApproval: latestApproval
+        ? {
+            id: latestApproval.id,
+            requestId: latestApproval.requestId,
+            createdAt: latestApproval.createdAt.toISOString(),
+          }
+        : null,
+      latestAudit: latestAudit
+        ? {
+            id: latestAudit.id,
+            requestId: latestAudit.requestId,
+            createdAt: latestAudit.createdAt.toISOString(),
+          }
+        : null,
+      lastWriteError: lastWriteError?.value ?? null,
+      lastRotationError: rotationError?.value ?? null,
+    };
+
+    await db.systemStatus.upsert({
+      where: { key: "approval_audit_health" },
+      create: { key: "approval_audit_health", value: status },
+      update: { value: status },
+    });
+
+    if (stale) {
+      await sendOpsAlert(
+        "approval-audit-lag",
+        "Approval audit stream lag exceeds configured threshold",
+        {
+          lagMinutes,
+          maxLagMinutes: APPROVAL_AUDIT_MAX_LAG_MINUTES,
+          latestApproval: status.latestApproval,
+          latestAudit: status.latestAudit,
+        }
+      );
+    }
+
+    if (rotationError?.value) {
+      await sendOpsAlert(
+        "approval-audit-rotation-error",
+        "Approval audit rotation reported an error",
+        { rotationError: rotationError.value }
+      );
+    }
+
+    const spikeSince = new Date(Date.now() - Math.max(1, APPROVAL_AUDIT_SPIKE_WINDOW_HOURS) * 60 * 60 * 1000);
+    const windowEvents = await db.approvalAuditEvent.findMany({
+      where: {
+        createdAt: { gte: spikeSince },
+        decision: { in: ["APPROVED", "EXECUTED"] },
+      },
+      select: {
+        decisionPath: true,
+      },
+      take: 5000,
+    });
+
+    const sampleCount = windowEvents.length;
+    const autoCount = windowEvents.filter((event) => event.decisionPath === "POLICY_AUTO").length;
+    const autoRatio = sampleCount > 0 ? autoCount / sampleCount : 0;
+
+    const prevSpike = await db.systemStatus.findUnique({ where: { key: "approval_audit_decision_path_spike" } });
+    const prevValue = (prevSpike?.value ?? {}) as Record<string, unknown>;
+    const prevRatio = typeof prevValue.autoRatio === "number" ? prevValue.autoRatio : 0;
+    const ratioDelta = autoRatio - prevRatio;
+    const flagged =
+      sampleCount >= Math.max(1, APPROVAL_AUDIT_SPIKE_MIN_SAMPLES) &&
+      autoRatio >= APPROVAL_AUDIT_AUTO_SPIKE_RATIO &&
+      ratioDelta >= APPROVAL_AUDIT_AUTO_SPIKE_DELTA;
+
+    const spikeStatus = {
+      checkedAt: new Date().toISOString(),
+      windowHours: Math.max(1, APPROVAL_AUDIT_SPIKE_WINDOW_HOURS),
+      minSamples: Math.max(1, APPROVAL_AUDIT_SPIKE_MIN_SAMPLES),
+      ratioThreshold: APPROVAL_AUDIT_AUTO_SPIKE_RATIO,
+      deltaThreshold: APPROVAL_AUDIT_AUTO_SPIKE_DELTA,
+      sampleCount,
+      autoCount,
+      autoRatio,
+      prevRatio,
+      ratioDelta,
+      flagged,
+    };
+
+    await db.systemStatus.upsert({
+      where: { key: "approval_audit_decision_path_spike" },
+      create: { key: "approval_audit_decision_path_spike", value: spikeStatus },
+      update: { value: spikeStatus },
+    });
+
+    if (flagged) {
+      await sendOpsAlert(
+        "approval-audit-decision-path-spike",
+        "Approval audit auto-approval ratio spiked",
+        spikeStatus
+      );
+    }
+  };
+
   if (gatewayClient) {
     approvalResumeTimer = setInterval(() => {
       dispatchService.resumeApprovedRequests().catch((err) => {
@@ -288,6 +419,18 @@ async function main() {
         });
       });
     }, TRUST_VERIFY_INTERVAL_MS);
+
+    runApprovalAuditHealthCheck().catch((err) => {
+      const errorText = err instanceof Error ? err.message : String(err);
+      console.error(`[worker] Initial approval audit health check failed: ${errorText}`);
+    });
+
+    approvalAuditHealthTimer = setInterval(() => {
+      runApprovalAuditHealthCheck().catch((err) => {
+        const errorText = err instanceof Error ? err.message : String(err);
+        console.error(`[worker] Approval audit health check failed: ${errorText}`);
+      });
+    }, APPROVAL_AUDIT_HEALTH_INTERVAL_MS);
   }
 
   // Event handler
@@ -346,6 +489,7 @@ async function main() {
     heartbeatTimer,
     approvalResumeTimer,
     trustVerifyTimer,
+    approvalAuditHealthTimer,
     gatewayClient,
   });
 

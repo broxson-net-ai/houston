@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@houston/shared";
 import { requireAuth } from "@/lib/session";
+import { randomUUID } from "crypto";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -186,6 +187,24 @@ export async function POST(req: NextRequest) {
       taskRunId: taskRunId || null,
     },
   });
+
+  await db.approvalAuditEvent.create({
+    data: {
+      eventId: randomUUID(),
+      requestId: request.requestId,
+      taskRunId: request.taskRunId,
+      role: request.role,
+      trigger: request.trigger,
+      severity: request.severity,
+      decision: "REQUESTED",
+      decisionPath: "SYSTEM",
+      deciderType: "api:approvals",
+      summary: `Approval requested via API for role '${request.role}' trigger '${request.trigger}'`,
+      evidenceRefs: {
+        source: "api/approvals",
+      },
+    },
+  }).catch(() => null);
 
   return NextResponse.json(request, { status: 201 });
 }

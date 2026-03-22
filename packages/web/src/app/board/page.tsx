@@ -260,6 +260,14 @@ export default function BoardPage() {
   const [activeTask, setActiveTask] = useState<Task | null>(null);
   const [toasts, setToasts] = useState<Array<{ id: string; type: "success" | "error"; message: string }>>([]);
 
+  useEffect(() => {
+    const prefill = new URLSearchParams(window.location.search).get("prefill");
+    if (prefill && !q) {
+      setQ(prefill);
+      setView("status");
+    }
+  }, [q]);
+
   function pushToast(type: "success" | "error", message: string) {
     const id = `${Date.now()}-${Math.random()}`;
     setToasts((current) => [...current, { id, type, message }]);

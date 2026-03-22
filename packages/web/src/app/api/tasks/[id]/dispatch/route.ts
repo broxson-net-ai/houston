@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@houston/shared";
 import { requireAuth } from "@/lib/session";
+import { enqueueTaskDispatch } from "@/lib/queue";
 
 export async function POST(
   req: NextRequest,
@@ -15,13 +16,13 @@ export async function POST(
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
 
-  // Enqueue a dispatch job via pg-boss would happen here
-  // For now, create a QUEUED event
+  await enqueueTaskDispatch(id, "manual-dispatch");
+
   await db.taskEvent.create({
     data: {
       taskId: id,
       type: "QUEUED",
-      message: "Manual dispatch requested",
+      message: "Manual dispatch requested and enqueued",
     },
   });
 

@@ -237,6 +237,58 @@ enum ApprovalDecision {
   REVISED
 }
 
+enum ApprovalDecisionPath {
+  MANUAL
+  POLICY_AUTO
+  SYSTEM
+}
+
+enum ApprovalAuditDecision {
+  REQUESTED
+  APPROVED
+  DENIED
+  REVISED
+  EXPIRED
+  CANCELLED
+  EXECUTED
+}
+
+model ApprovalAuditEvent {
+  id           String              @id @default(cuid())
+  eventId      String              @unique
+  eventVersion Int                 @default(1)
+
+  requestId    String
+  taskRunId    String?
+  taskId       String?
+  projectId    String?
+  lane         String?
+
+  role         String
+  trigger      String
+  severity     ApprovalSeverity
+  decision     ApprovalAuditDecision
+  decisionPath ApprovalDecisionPath
+  deciderType  String
+  deciderId    String?
+
+  autonomyTier String?
+  dataClass    String?
+  summary      String
+  evidenceRefs Json?
+
+  createdAt    DateTime            @default(now())
+  decidedAt    DateTime?
+  latencyMs    Int?
+  meta         Json?
+
+  @@index([requestId])
+  @@index([trigger])
+  @@index([decision])
+  @@index([createdAt])
+  @@map("approval_audit_events")
+}
+
 model ApprovalRequest {
   id           String           @id @default(cuid())
   requestId    String           @unique

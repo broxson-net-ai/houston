@@ -1,7 +1,15 @@
 import PgBoss from "pg-boss";
 import { db } from "@houston/shared";
 import cronParser from "cron-parser";
-import { DispatchService, DispatchJobData } from "./dispatcher.js";
+import { DispatchService, DispatchJobData, DispatchTaskJobData } from "./dispatcher.js";
+import os from "os";
+import path from "path";
+import { promises as fsp } from "fs";
+import { createWriteStream } from "fs";
+import { createGzip } from "zlib";
+import { createHash } from "crypto";
+import { pipeline } from "stream/promises";
+import { Readable } from "stream";
 
 const parseCronExpression = (cronParser as any).parseExpression;
 
@@ -19,6 +27,17 @@ const LOG_RETENTION_DAYS = parseInt(
   process.env.HOUSTON_LOG_RETENTION_DAYS ?? "30",
   10
 );
+const APPROVAL_AUDIT_ROTATE_DAYS = parseInt(
+  process.env.HOUSTON_APPROVAL_AUDIT_ROTATE_DAYS ?? "7",
+  10
+);
+const APPROVAL_AUDIT_ROTATE_BATCH_SIZE = parseInt(
+  process.env.HOUSTON_APPROVAL_AUDIT_ROTATE_BATCH_SIZE ?? "500",
+  10
+);
+const APPROVAL_AUDIT_ARCHIVE_DIR =
+  process.env.HOUSTON_APPROVAL_AUDIT_ARCHIVE_DIR ??
+  path.join(os.homedir(), ".openclaw", "workspace", "state", "approval-audit-archive");
 
 export type ScheduleRow = {
   id: string;
@@ -82,6 +101,14 @@ export class HoustonScheduler {
       { teamSize: parseInt(process.env.HOUSTON_DISPATCH_CONCURRENCY ?? "5", 10) },
       async (job) => {
         await this.dispatchService.dispatch(job.data);
+      }
+    );
+
+    await this.boss.work<DispatchTaskJobData>(
+      "dispatch-task",
+      { teamSize: parseInt(process.env.HOUSTON_DISPATCH_CONCURRENCY ?? "5", 10) },
+      async (job) => {
+        await this.dispatchService.dispatchTask(job.data);
       }
     );
 
@@ -273,12 +300,148 @@ export class HoustonScheduler {
             `older than ${LOG_RETENTION_DAYS} days`
         );
       }
+
+      await this.rotateApprovalAuditEvents();
     } catch (err) {
       const errorText = err instanceof Error ? err.message : String(err);
       console.error(
         `[scheduler] Failed to cleanup old logs: ${errorText} ` +
             `(retention: ${LOG_RETENTION_DAYS} days)`
       );
+    }
+  }
+
+  async rotateApprovalAuditEvents(): Promise<void> {
+    if (APPROVAL_AUDIT_ROTATE_DAYS <= 0) return;
+
+    try {
+
+    const cutoffDate = new Date();
+    cutoffDate.setDate(cutoffDate.getDate() - APPROVAL_AUDIT_ROTATE_DAYS);
+
+    let rotated = 0;
+    let deleted = 0;
+    let files = 0;
+
+    while (true) {
+      const batch = await db.approvalAuditEvent.findMany({
+        where: { createdAt: { lt: cutoffDate } },
+        orderBy: { createdAt: "asc" },
+        take: APPROVAL_AUDIT_ROTATE_BATCH_SIZE,
+      });
+
+      if (batch.length === 0) break;
+
+      const groups = new Map<string, typeof batch>();
+      for (const item of batch) {
+        const day = item.createdAt.toISOString().slice(0, 10);
+        if (!groups.has(day)) groups.set(day, []);
+        groups.get(day)!.push(item);
+      }
+
+      for (const [day, events] of groups.entries()) {
+        const [year, month] = day.split("-");
+        const dir = path.join(APPROVAL_AUDIT_ARCHIVE_DIR, year, month);
+        await fsp.mkdir(dir, { recursive: true });
+
+        const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+        const baseName = `approval-audit-${day}-${stamp}`;
+        const jsonlPath = path.join(dir, `${baseName}.jsonl`);
+        const gzPath = `${jsonlPath}.gz`;
+
+        const lines = events
+          .map((event) => JSON.stringify(event))
+          .join("\n");
+        await fsp.writeFile(jsonlPath, `${lines}\n`, "utf8");
+
+        await pipeline(
+          Readable.from([await fsp.readFile(jsonlPath)]),
+          createGzip({ level: 9 }),
+          createWriteStream(gzPath)
+        );
+        await fsp.unlink(jsonlPath);
+
+        const gzBytes = await fsp.readFile(gzPath);
+        const checksum = createHash("sha256").update(gzBytes).digest("hex");
+        const manifestPath = path.join(APPROVAL_AUDIT_ARCHIVE_DIR, "manifest.jsonl");
+        const manifestEntry = {
+          archivedAt: new Date().toISOString(),
+          day,
+          file: path.relative(APPROVAL_AUDIT_ARCHIVE_DIR, gzPath),
+          count: events.length,
+          checksum,
+          firstCreatedAt: events[0]?.createdAt?.toISOString() ?? null,
+          lastCreatedAt: events[events.length - 1]?.createdAt?.toISOString() ?? null,
+        };
+        await fsp.appendFile(manifestPath, `${JSON.stringify(manifestEntry)}\n`, "utf8");
+
+        const ids = events.map((event) => event.id);
+        const res = await db.approvalAuditEvent.deleteMany({
+          where: { id: { in: ids } },
+        });
+
+        rotated += events.length;
+        deleted += res.count;
+        files += 1;
+      }
+    }
+
+    await db.systemStatus.upsert({
+      where: { key: "approval_audit_rotation" },
+      create: {
+        key: "approval_audit_rotation",
+        value: {
+          ranAt: new Date().toISOString(),
+          rotateDays: APPROVAL_AUDIT_ROTATE_DAYS,
+          batchSize: APPROVAL_AUDIT_ROTATE_BATCH_SIZE,
+          rotated,
+          deleted,
+          files,
+          archiveDir: APPROVAL_AUDIT_ARCHIVE_DIR,
+        },
+      },
+      update: {
+        value: {
+          ranAt: new Date().toISOString(),
+          rotateDays: APPROVAL_AUDIT_ROTATE_DAYS,
+          batchSize: APPROVAL_AUDIT_ROTATE_BATCH_SIZE,
+          rotated,
+          deleted,
+          files,
+          archiveDir: APPROVAL_AUDIT_ARCHIVE_DIR,
+        },
+      },
+    });
+
+    if (rotated > 0) {
+      console.log(
+        `[scheduler] Rotated ${rotated} approval audit events into ${files} archive files ` +
+          `(deleted ${deleted}, cutoff ${APPROVAL_AUDIT_ROTATE_DAYS}d)`
+      );
+    }
+    } catch (err) {
+      const errorText = err instanceof Error ? err.message : String(err);
+      await db.systemStatus
+        .upsert({
+          where: { key: "approval_audit_rotation_error" },
+          create: {
+            key: "approval_audit_rotation_error",
+            value: {
+              at: new Date().toISOString(),
+              error: errorText,
+              archiveDir: APPROVAL_AUDIT_ARCHIVE_DIR,
+            },
+          },
+          update: {
+            value: {
+              at: new Date().toISOString(),
+              error: errorText,
+              archiveDir: APPROVAL_AUDIT_ARCHIVE_DIR,
+            },
+          },
+        })
+        .catch(() => null);
+      throw err;
     }
   }
 }

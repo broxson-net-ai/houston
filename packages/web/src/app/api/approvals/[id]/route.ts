@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@houston/shared";
 import { requireAuth } from "@/lib/session";
+import { randomUUID } from "crypto";
 
 export async function GET(
   req: NextRequest,
@@ -69,6 +70,36 @@ export async function PATCH(
       decidedAt: new Date(),
     },
   });
+
+  await db.approvalAuditEvent.create({
+    data: {
+      eventId: randomUUID(),
+      requestId: updated.requestId,
+      taskRunId: updated.taskRunId,
+      role: updated.role,
+      trigger: updated.trigger,
+      severity: updated.severity,
+      decision,
+      decisionPath: "MANUAL",
+      deciderType: decider || "admin",
+      deciderId: decider || "admin",
+      summary:
+        decision === "REVISED"
+          ? `Approval revised by ${decider || "admin"}`
+          : `Approval ${decision.toLowerCase()} by ${decider || "admin"}`,
+      decidedAt: updated.decidedAt,
+      latencyMs: updated.decidedAt
+        ? Math.max(0, updated.decidedAt.getTime() - updated.createdAt.getTime())
+        : null,
+      evidenceRefs: {
+        outcome: updated.outcome,
+        reason: updated.reason,
+      },
+      meta: {
+        source: "api/approvals/[id]",
+      },
+    },
+  }).catch(() => null);
 
   return NextResponse.json(updated);
 }
