@@ -113,6 +113,10 @@ export async function GET(req: NextRequest) {
     orderBy: { createdAt: "desc" },
   });
 
+  if (view === "list") {
+    return NextResponse.json({ view: "list", tasks });
+  }
+
   if (view === "status") {
     // Group tasks by status
     const grouped: Record<string, typeof tasks> = {

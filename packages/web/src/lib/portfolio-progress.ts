@@ -3,7 +3,7 @@ import "server-only";
 import { db } from "@houston/shared";
 
 export type PortfolioTaskBucketProgress = {
-  prefix: "V2NOW" | "V2NEXT" | "V2LATER";
+  prefix: "NOW" | "NEXT" | "LATER";
   total: number;
   queue: number;
   inProgress: number;
@@ -38,8 +38,15 @@ type TaskRow = {
   status: "QUEUE" | "IN_PROGRESS" | "DONE" | "FAILED";
 };
 
-function emptyBucket(prefix: "V2NOW" | "V2NEXT" | "V2LATER"): PortfolioTaskBucketProgress {
+function emptyBucket(prefix: "NOW" | "NEXT" | "LATER"): PortfolioTaskBucketProgress {
   return { prefix, total: 0, queue: 0, inProgress: 0, done: 0, failed: 0 };
+}
+
+function bucketFromTitle(title: string): "NOW" | "NEXT" | "LATER" | null {
+  if (/^NOW\s+/i.test(title)) return "NOW";
+  if (/^NEXT\s+/i.test(title)) return "NEXT";
+  if (/^LATER\s+/i.test(title)) return "LATER";
+  return null;
 }
 
 function applyStatus(target: { total: number; queue: number; inProgress: number; done: number; failed: number }, status: TaskRow["status"]) {
@@ -55,9 +62,9 @@ export async function getPortfolioExecutionProgress(gateTitles: string[]): Promi
     where: {
       archivedAt: null,
       OR: [
-        { title: { startsWith: "V2NOW " } },
-        { title: { startsWith: "V2NEXT " } },
-        { title: { startsWith: "V2LATER " } },
+        { title: { startsWith: "NOW " } },
+        { title: { startsWith: "NEXT " } },
+        { title: { startsWith: "LATER " } },
       ],
     },
     select: { title: true, status: true },
@@ -65,9 +72,9 @@ export async function getPortfolioExecutionProgress(gateTitles: string[]): Promi
   });
 
   const buckets = {
-    V2NOW: emptyBucket("V2NOW"),
-    V2NEXT: emptyBucket("V2NEXT"),
-    V2LATER: emptyBucket("V2LATER"),
+    NOW: emptyBucket("NOW"),
+    NEXT: emptyBucket("NEXT"),
+    LATER: emptyBucket("LATER"),
   };
 
   const lanes: Record<string, PortfolioLaneProgress> = {
@@ -79,13 +86,7 @@ export async function getPortfolioExecutionProgress(gateTitles: string[]): Promi
   };
 
   for (const row of rows as TaskRow[]) {
-    const prefix = row.title.startsWith("V2NOW ")
-      ? "V2NOW"
-      : row.title.startsWith("V2NEXT ")
-        ? "V2NEXT"
-        : row.title.startsWith("V2LATER ")
-          ? "V2LATER"
-          : null;
+    const prefix = bucketFromTitle(row.title);
     if (!prefix) continue;
 
     applyStatus(buckets[prefix], row.status);
@@ -111,7 +112,7 @@ export async function getPortfolioExecutionProgress(gateTitles: string[]): Promi
   });
 
   return {
-    buckets: [buckets.V2NOW, buckets.V2NEXT, buckets.V2LATER],
+    buckets: [buckets.NOW, buckets.NEXT, buckets.LATER],
     lanes: Object.values(lanes),
     gates: gateProgress,
   };

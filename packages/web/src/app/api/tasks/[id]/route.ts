@@ -24,6 +24,31 @@ export async function GET(
         orderBy: { attemptNumber: "asc" },
       },
       taskEvents: { orderBy: { createdAt: "asc" } },
+      dependencies: {
+        include: {
+          dependsOnTask: {
+            select: {
+              id: true,
+              title: true,
+              status: true,
+              project: { select: { slug: true, title: true } },
+            },
+          },
+        },
+      },
+      dependedBy: {
+        include: {
+          task: {
+            select: {
+              id: true,
+              title: true,
+              status: true,
+              autoDispatch: true,
+              project: { select: { slug: true, title: true } },
+            },
+          },
+        },
+      },
     },
   });
 
@@ -48,25 +73,47 @@ export async function PATCH(
   }
 
   const body = await req.json();
-  const { title, agentId, dueAt, archivedAt, status } = body;
+  const { title, agentId, dueAt, archivedAt, status, autoDispatch, dependencyTaskIds } = body;
 
   const VALID_STATUSES = ["QUEUE", "IN_PROGRESS", "DONE", "FAILED"];
   if (status !== undefined && !VALID_STATUSES.includes(status)) {
     return NextResponse.json({ error: "Invalid status" }, { status: 400 });
   }
 
-  const updated = await db.task.update({
-    where: { id },
-    data: {
-      ...(title !== undefined && { title }),
-      ...(agentId !== undefined && { agentId }),
-      ...(dueAt !== undefined && { dueAt: dueAt ? new Date(dueAt) : null }),
-      ...(archivedAt !== undefined && {
-        archivedAt: archivedAt ? new Date(archivedAt) : null,
-      }),
-      ...(status !== undefined && { status }),
-    },
-    include: { agent: true, template: true },
+  const normalizedDependencyTaskIds = Array.isArray(dependencyTaskIds)
+    ? dependencyTaskIds.filter((value: unknown): value is string => typeof value === "string" && value.length > 0 && value !== id)
+    : null;
+
+  const updated = await db.$transaction(async (tx) => {
+    const row = await tx.task.update({
+      where: { id },
+      data: {
+        ...(title !== undefined && { title }),
+        ...(agentId !== undefined && { agentId }),
+        ...(dueAt !== undefined && { dueAt: dueAt ? new Date(dueAt) : null }),
+        ...(archivedAt !== undefined && {
+          archivedAt: archivedAt ? new Date(archivedAt) : null,
+        }),
+        ...(status !== undefined && { status }),
+        ...(autoDispatch !== undefined && { autoDispatch: Boolean(autoDispatch) }),
+      },
+      include: { agent: true, template: true },
+    });
+
+    if (normalizedDependencyTaskIds !== null) {
+      await tx.taskDependency.deleteMany({ where: { taskId: id } });
+      if (normalizedDependencyTaskIds.length > 0) {
+        await tx.taskDependency.createMany({
+          data: normalizedDependencyTaskIds.map((dependsOnTaskId: string) => ({
+            taskId: id,
+            dependsOnTaskId,
+          })),
+          skipDuplicates: true,
+        });
+      }
+    }
+
+    return row;
   });
 
   if (archivedAt !== undefined) {
@@ -83,6 +130,24 @@ export async function PATCH(
         taskId: id,
         type: "STATUS_CHANGED",
         message: `Status changed from ${task.status} to ${status}`,
+      },
+    });
+  } else if (autoDispatch !== undefined) {
+    await db.taskEvent.create({
+      data: {
+        taskId: id,
+        type: "STATUS_CHANGED",
+        message: `Auto-dispatch ${autoDispatch ? "enabled" : "disabled"}`,
+        metadata: { autoDispatch: Boolean(autoDispatch) },
+      },
+    });
+  } else if (normalizedDependencyTaskIds !== null) {
+    await db.taskEvent.create({
+      data: {
+        taskId: id,
+        type: "STATUS_CHANGED",
+        message: "Task dependencies updated",
+        metadata: { dependencyTaskIds: normalizedDependencyTaskIds },
       },
     });
   }

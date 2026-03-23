@@ -33,9 +33,14 @@ type Task = {
   agent?: { id: string; name: string } | null;
   template?: { id: string; name: string } | null;
   schedule?: { id: string; cron: string; missedCount: number } | null;
+  autoDispatch?: boolean;
+  dependencies?: Array<{ id: string; dependsOnTask: { id: string; title: string; status: string; project?: { slug: string; title: string } | null } }>;
+  dependedBy?: Array<{ id: string; task: { id: string; title: string; status: string; autoDispatch: boolean; project?: { slug: string; title: string } | null } }>;
   taskRuns: TaskRun[];
   taskEvents: TaskEvent[];
 };
+
+type TaskOption = { id: string; title: string; status: string; project?: { slug: string; title: string } | null };
 
 function StatusBadge({ status }: { status: string }) {
   const colors: Record<string, string> = {
@@ -57,16 +62,46 @@ export default function TaskDetailPage() {
   const [task, setTask] = useState<Task | null>(null);
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const [showPayload, setShowPayload] = useState(false);
+  const [taskOptions, setTaskOptions] = useState<TaskOption[]>([]);
+  const [selectedDeps, setSelectedDeps] = useState<string[]>([]);
+  const [savingDeps, setSavingDeps] = useState(false);
+  const [autoDispatch, setAutoDispatch] = useState(false);
 
   useEffect(() => {
     if (!id) return;
     fetch(`/api/tasks/${id}`).then((r) => r.json()).then((t) => {
       setTask(t);
+      setSelectedDeps((t.dependencies ?? []).map((d: any) => d.dependsOnTask.id));
+      setAutoDispatch(Boolean(t.autoDispatch));
       if (t.taskRuns?.length > 0) {
         setActiveRunId(t.taskRuns[t.taskRuns.length - 1].id);
       }
     });
+    fetch('/api/tasks?view=list').then((r) => r.json()).then((payload) => {
+      setTaskOptions(payload.tasks ?? []);
+    });
   }, [id]);
+
+  async function saveDependencies(nextDeps: string[]) {
+    setSavingDeps(true);
+    await fetch(`/api/tasks/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ dependencyTaskIds: nextDeps }),
+    });
+    setSavingDeps(false);
+    window.location.reload();
+  }
+
+  async function saveAutoDispatch(next: boolean) {
+    setAutoDispatch(next);
+    await fetch(`/api/tasks/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ autoDispatch: next }),
+    });
+    window.location.reload();
+  }
 
   if (!task) return <div className="min-h-screen bg-background"><Nav /><p className="p-8 text-muted-foreground">Loading...</p></div>;
 
@@ -147,6 +182,67 @@ export default function TaskDetailPage() {
 
           {/* Main content */}
           <div className="md:col-span-2 space-y-6">
+            <div className="space-y-2 border rounded-md p-3">
+              <h2 className="font-semibold text-sm uppercase tracking-wide text-muted-foreground">Dependencies</h2>
+              <div className="flex items-center gap-2 text-xs">
+                <label className="font-medium">Auto Dispatch</label>
+                <input
+                  type="checkbox"
+                  checked={autoDispatch}
+                  onChange={(e) => saveAutoDispatch(e.target.checked)}
+                />
+              </div>
+              <div className="text-xs text-muted-foreground">
+                Depends on: {(task.dependencies ?? []).length} · Unblocks: {(task.dependedBy ?? []).length}
+              </div>
+              {(task.dependencies ?? []).length > 0 && (
+                <ul className="text-xs space-y-1">
+                  {(task.dependencies ?? []).map((dep) => (
+                    <li key={dep.id}>
+                      {dep.dependsOnTask.status} · {dep.dependsOnTask.title}
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {(task.dependedBy ?? []).length > 0 && (
+                <div className="text-xs">
+                  <div className="font-medium mb-1">Unblocks</div>
+                  <ul className="space-y-1">
+                    {(task.dependedBy ?? []).map((dep) => (
+                      <li key={dep.id}>{dep.task.status} · {dep.task.title}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              <div className="space-y-1">
+                <label className="text-xs font-medium">Edit dependencies</label>
+                <select
+                  multiple
+                  className="w-full px-2 py-2 border rounded-md text-xs bg-background min-h-28"
+                  value={selectedDeps}
+                  onChange={(e) => {
+                    const vals = Array.from(e.currentTarget.selectedOptions).map((o) => o.value);
+                    setSelectedDeps(vals);
+                  }}
+                >
+                  {taskOptions
+                    .filter((opt) => opt.id !== task.id)
+                    .map((opt) => (
+                      <option key={opt.id} value={opt.id}>
+                        {opt.status} · {opt.title}
+                      </option>
+                    ))}
+                </select>
+                <button
+                  onClick={() => saveDependencies(selectedDeps)}
+                  disabled={savingDeps}
+                  className="px-2 py-1 text-xs border rounded hover:bg-muted"
+                >
+                  {savingDeps ? 'Saving…' : 'Save dependencies'}
+                </button>
+              </div>
+            </div>
+
             {/* Runs list (if multiple) */}
             {task.taskRuns.length > 1 && (
               <div className="space-y-2">

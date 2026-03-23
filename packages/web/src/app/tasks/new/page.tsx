@@ -6,17 +6,21 @@ import { Nav } from "@/components/nav";
 
 type Agent = { id: string; name: string };
 type Project = { id: string; slug: string; name: string };
+type TaskOption = { id: string; title: string; status: string };
 
 export default function NewTaskPage() {
   const router = useRouter();
   const [agents, setAgents] = useState<Agent[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
+  const [taskOptions, setTaskOptions] = useState<TaskOption[]>([]);
   const [form, setForm] = useState({
     title: "",
     agentId: "",
     projectId: "",
     dueAt: "",
     instructionsOverride: "",
+    autoDispatch: false,
+    dependencyTaskIds: [] as string[],
   });
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
@@ -25,9 +29,11 @@ export default function NewTaskPage() {
     Promise.all([
       fetch("/api/agents").then((r) => r.json()),
       fetch("/api/projects").then((r) => r.json()),
-    ]).then(([agentsData, projectsData]) => {
+      fetch("/api/tasks?view=list").then((r) => r.json()),
+    ]).then(([agentsData, projectsData, tasksData]) => {
       if (agentsData.agents) setAgents(agentsData.agents);
       if (projectsData.projects) setProjects(projectsData.projects);
+      if (tasksData.tasks) setTaskOptions(tasksData.tasks);
     });
   }, []);
 
@@ -45,6 +51,8 @@ export default function NewTaskPage() {
         projectId: form.projectId || null,
         dueAt: form.dueAt || null,
         instructionsOverride: form.instructionsOverride || null,
+        autoDispatch: form.autoDispatch,
+        dependencyTaskIds: form.dependencyTaskIds,
       }),
     });
 
@@ -117,6 +125,40 @@ export default function NewTaskPage() {
                 </option>
               ))}
             </select>
+          </div>
+          <div>
+            <label className="inline-flex items-center gap-2 text-sm font-medium">
+              <input
+                type="checkbox"
+                checked={form.autoDispatch}
+                onChange={(e) => setForm({ ...form, autoDispatch: e.target.checked })}
+              />
+              Enable auto-dispatch (dependency-aware)
+            </label>
+          </div>
+          <div>
+            <label htmlFor="dependencyTaskIds" className="block text-sm font-medium mb-1">
+              Depends on tasks
+            </label>
+            <select
+              id="dependencyTaskIds"
+              multiple
+              className="w-full px-3 py-2 border rounded-md text-sm bg-background min-h-28"
+              value={form.dependencyTaskIds}
+              onChange={(e) =>
+                setForm({
+                  ...form,
+                  dependencyTaskIds: Array.from(e.currentTarget.selectedOptions).map((o) => o.value),
+                })
+              }
+            >
+              {taskOptions.map((t) => (
+                <option key={t.id} value={t.id}>
+                  {t.status} · {t.title}
+                </option>
+              ))}
+            </select>
+            <p className="text-xs text-muted-foreground mt-1">Hold Cmd/Ctrl to select multiple dependencies.</p>
           </div>
           <div>
             <label htmlFor="dueAt" className="block text-sm font-medium mb-1">

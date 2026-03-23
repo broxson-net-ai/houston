@@ -9,7 +9,7 @@ function pct(done: number, total: number) {
 
 function getBucket(
   progress: PortfolioExecutionProgress | null,
-  prefix: "V2NOW" | "V2NEXT" | "V2LATER"
+  prefix: "NOW" | "NEXT" | "LATER"
 ) {
   return progress?.buckets.find((bucket) => bucket.prefix === prefix) ?? null;
 }
@@ -22,9 +22,9 @@ export default function PortfolioExecutionBoardCard({
   progress: PortfolioExecutionProgress | null;
 }) {
   const totalLaneProjects = board.lanes.reduce((acc, lane) => acc + lane.projects.length, 0);
-  const nowBucket = getBucket(progress, "V2NOW");
-  const nextBucket = getBucket(progress, "V2NEXT");
-  const laterBucket = getBucket(progress, "V2LATER");
+  const nowBucket = getBucket(progress, "NOW");
+  const nextBucket = getBucket(progress, "NEXT");
+  const laterBucket = getBucket(progress, "LATER");
 
   return (
     <section className="mb-8 rounded-xl border bg-card p-5 shadow-sm">
@@ -32,7 +32,7 @@ export default function PortfolioExecutionBoardCard({
         <div className="space-y-2">
           <h2 className="text-xl font-semibold">Portfolio Execution</h2>
           <p className="text-sm text-muted-foreground">
-            Canonical cross-project execution board from <code>PORTFOLIO_EXECUTION.md</code> (v2 lanes and gates).
+            Canonical cross-project execution board from <code>PORTFOLIO_EXECUTION.md</code>.
           </p>
         </div>
         <div className="grid grid-cols-2 gap-2 text-xs md:grid-cols-3">
@@ -61,7 +61,7 @@ export default function PortfolioExecutionBoardCard({
             <div className="font-medium">{totalLaneProjects}</div>
           </div>
           <div className="rounded-md border px-3 py-2">
-            <div className="text-muted-foreground">V2NOW progress</div>
+            <div className="text-muted-foreground">Now progress</div>
             <div className="font-medium">
               {nowBucket ? `${nowBucket.done}/${nowBucket.total}` : "0/0"}
             </div>
@@ -73,7 +73,7 @@ export default function PortfolioExecutionBoardCard({
         <div className="rounded-lg border p-3">
           <div className="mb-2 flex items-center justify-between gap-2">
             <h3 className="text-sm font-semibold">Now</h3>
-            <Link href="/board?prefill=V2NOW" className="text-xs text-blue-600 hover:underline">Open tasks</Link>
+            <Link href="/board?prefill=NOW" className="text-xs text-blue-600 hover:underline">Open tasks</Link>
           </div>
           {nowBucket ? (
             <p className="mb-2 text-xs text-muted-foreground">
@@ -91,7 +91,7 @@ export default function PortfolioExecutionBoardCard({
         <div className="rounded-lg border p-3">
           <div className="mb-2 flex items-center justify-between gap-2">
             <h3 className="text-sm font-semibold">Next</h3>
-            <Link href="/board?prefill=V2NEXT" className="text-xs text-blue-600 hover:underline">Open tasks</Link>
+            <Link href="/board?prefill=NEXT" className="text-xs text-blue-600 hover:underline">Open tasks</Link>
           </div>
           {nextBucket ? (
             <p className="mb-2 text-xs text-muted-foreground">
@@ -109,7 +109,7 @@ export default function PortfolioExecutionBoardCard({
         <div className="rounded-lg border p-3">
           <div className="mb-2 flex items-center justify-between gap-2">
             <h3 className="text-sm font-semibold">Later</h3>
-            <Link href="/board?prefill=V2LATER" className="text-xs text-blue-600 hover:underline">Open tasks</Link>
+            <Link href="/board?prefill=LATER" className="text-xs text-blue-600 hover:underline">Open tasks</Link>
           </div>
           {laterBucket ? (
             <p className="mb-2 text-xs text-muted-foreground">
