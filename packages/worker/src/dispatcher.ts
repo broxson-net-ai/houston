@@ -97,6 +97,80 @@ function parseTrustModeConfig(): Record<string, TrustMode> {
   }
 }
 
+interface AutoAssignContext {
+  task: any;
+  taskTags: string[];
+  projectSlug?: string | null;
+  agents: Array<{ id: string; name: string; routingKey: string; enabled: boolean }>;
+}
+
+async function autoAssignAgent(context: AutoAssignContext): Promise<string> {
+  const { task, taskTags, projectSlug, agents } = context;
+
+  console.log(`[dispatcher] Auto-assigning agent for task ${task.id}`);
+
+  // 1. Tag-based routing (highest priority)
+  const tagPriorityMap: Record<string, string[]> = {
+    'ops-agent': ['infrastructure', 'mcp', 'kpi', 'audit', 'monitoring', 'data'],
+    'biz-ops-agent': ['business', 'workflow', 'automat', 'kpi', 'reporting'],
+    'exec-assistant': ['exec', 'assistant', 'calendar', 'contact', 'email'],
+    'main': ['general', 'test', 'e2e'],
+  };
+
+  for (const [agentName, keywords] of Object.entries(tagPriorityMap)) {
+    const agent = agents.find(a => a.name === agentName);
+    if (agent && taskTags.some(tag => keywords.some(k => tag.toLowerCase().includes(k)))) {
+      console.log(`[dispatcher] Tag match: "${taskTags.join(', ')}" → ${agentName}`);
+      return agent.id;
+    }
+  }
+
+  // 2. Project-based routing
+  const projectAgentMap: Record<string, string> = {
+    'x-utility': 'ops-agent',
+    'x-monitor': 'ops-agent',
+    'x-': 'ops-agent',
+    'approval-audit-log': 'ops-agent',
+    'backups-dr': 'ops-agent',
+    'network-cleanup': 'ops-agent',
+    'dynamic-dns': 'ops-agent',
+    'openclaw-dashboard': 'ops-agent',
+    'openclaw-docker-node': 'ops-agent',
+    'memory-retrieval-eval': 'ops-agent',
+    'liyth-ops-automation': 'biz-ops-agent',
+    'andante-ops-automation': 'biz-ops-agent',
+    'creator-education-ops': 'biz-ops-agent',
+  };
+
+  if (projectSlug) {
+    for (const [pattern, agentName] of Object.entries(projectAgentMap)) {
+      if (projectSlug.includes(pattern) || projectSlug.startsWith(pattern)) {
+        const agent = agents.find(a => a.name === agentName);
+        if (agent) {
+          console.log(`[dispatcher] Project match: "${projectSlug}" → ${agentName}`);
+          return agent.id;
+        }
+      }
+    }
+  }
+
+  // 3. Default fallback to main agent
+  const mainAgent = agents.find(a => a.name === 'main');
+  if (mainAgent) {
+    console.log(`[dispatcher] Default fallback: main agent`);
+    return mainAgent.id;
+  }
+
+  // 4. Last resort: first enabled agent
+  const firstEnabled = agents.find(a => a.enabled !== false);
+  if (firstEnabled) {
+    console.log(`[dispatcher] Last resort: ${firstEnabled.name} agent`);
+    return firstEnabled.id;
+  }
+
+  throw new Error('No enabled agents available for auto-assignment');
+}
+
 function resolveTrustMode(role: string, trigger: ApprovalTrigger): TrustMode {
   const trustModeConfig = parseTrustModeConfig();
   const trustModeDefault: TrustMode =
@@ -739,10 +813,28 @@ export class DispatchService {
   async dispatchTask(data: DispatchTaskJobData): Promise<void> {
     const { taskId } = data;
 
+    // Check if task is already being dispatched (has a recent ACCEPTED/RUNNING task run)
+    const activeRun = await db.taskRun.findFirst({
+      where: {
+        taskId: taskId,
+        status: { in: [TaskRunStatus.ACCEPTED, TaskRunStatus.RUNNING] },
+        createdAt: { gte: new Date(Date.now() - 60000) }, // Last 60 seconds
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    if (activeRun) {
+      console.log(`[dispatcher] Task ${taskId} already has active run ${activeRun.id}, skipping dispatch`);
+      return;
+    }
+
     const task = await db.task.findUnique({
       where: { id: taskId },
       include: {
         template: true,
+        project: {
+          select: { id: true, slug: true },
+        },
         taskRuns: {
           orderBy: { attemptNumber: "desc" },
           take: 1,
@@ -756,10 +848,54 @@ export class DispatchService {
       throw new Error(errorText);
     }
 
+    // Auto-assign agent if not already assigned
     if (!task.agentId) {
-      const errorText = `Task has no agentId: ${taskId}`;
-      console.error(`[dispatcher] ${errorText}`);
-      throw new Error(errorText);
+      console.log(`[dispatcher] Task ${taskId} has no agentId; attempting auto-assignment`);
+
+      // Double-check: Reload task to ensure it still doesn't have an agentId
+      // (This handles race conditions where another process might have assigned it)
+      const freshTask = await db.task.findUnique({
+        where: { id: taskId },
+        select: { agentId: true },
+      });
+
+      if (freshTask?.agentId) {
+        console.log(`[dispatcher] Task ${taskId} was assigned by another process; using existing agentId`);
+        task.agentId = freshTask.agentId;
+      } else {
+        // Get project slug
+        const projectSlug = task.project?.slug || null;
+
+        // Get template tags if available
+        let taskTags: string[] = [];
+        if (task.template && Array.isArray(task.template.tags)) {
+          taskTags = task.template.tags as string[];
+        }
+
+        // Get all enabled agents
+        const agents = await db.agent.findMany({
+          where: { enabled: true },
+          select: { id: true, name: true, routingKey: true, enabled: true },
+        });
+
+        // Auto-assign based on tags/project
+        const assignedAgentId = await autoAssignAgent({
+          task,
+          taskTags,
+          projectSlug,
+          agents,
+        });
+
+        // Update task with assigned agent
+        await db.task.update({
+          where: { id: taskId },
+          data: { agentId: assignedAgentId },
+        });
+
+        // Reload task with agentId
+        task.agentId = assignedAgentId;
+        console.log(`[dispatcher] Auto-assigned agent ${assignedAgentId} to task ${taskId}`);
+      }
     }
 
     const agent = await db.agent.findUnique({ where: { id: task.agentId } });
