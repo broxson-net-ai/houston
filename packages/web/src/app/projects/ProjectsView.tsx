@@ -18,6 +18,7 @@ function badgeColor(status?: string) {
   if (!status) return "bg-muted text-muted-foreground";
   const value = status.toLowerCase();
   if (value.includes("archiv")) return "bg-slate-200 text-slate-800";
+  if (value.includes("blocked")) return "bg-amber-100 text-amber-800";
   if (value.includes("paused")) return "bg-yellow-100 text-yellow-800";
   if (value.includes("done") || value.includes("complete"))
     return "bg-emerald-100 text-emerald-800";

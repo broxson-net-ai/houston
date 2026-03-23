@@ -9,6 +9,7 @@ datasource db {
 
 enum TaskStatus {
   QUEUE
+  BLOCKED
   IN_PROGRESS
   DONE
   FAILED

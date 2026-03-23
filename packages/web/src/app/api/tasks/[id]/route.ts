@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { db } from "@houston/shared";
+import { db, TaskStatus } from "@houston/shared";
 import { requireAuth } from "@/lib/session";
 
 export async function GET(
@@ -75,7 +75,7 @@ export async function PATCH(
   const body = await req.json();
   const { title, agentId, dueAt, archivedAt, status, autoDispatch, dependencyTaskIds } = body;
 
-  const VALID_STATUSES = ["QUEUE", "IN_PROGRESS", "DONE", "FAILED"];
+  const VALID_STATUSES = ["QUEUE", "BLOCKED", "IN_PROGRESS", "DONE", "FAILED"];
   if (status !== undefined && !VALID_STATUSES.includes(status)) {
     return NextResponse.json({ error: "Invalid status" }, { status: 400 });
   }
@@ -83,6 +83,8 @@ export async function PATCH(
   const normalizedDependencyTaskIds = Array.isArray(dependencyTaskIds)
     ? dependencyTaskIds.filter((value: unknown): value is string => typeof value === "string" && value.length > 0 && value !== id)
     : null;
+
+  let dependencyStatusMessage: string | null = null;
 
   const updated = await db.$transaction(async (tx) => {
     const row = await tx.task.update({
@@ -110,6 +112,33 @@ export async function PATCH(
           })),
           skipDuplicates: true,
         });
+      }
+
+      const unresolvedDependencies = normalizedDependencyTaskIds.length
+        ? await tx.task.count({
+            where: {
+              id: { in: normalizedDependencyTaskIds },
+              status: { not: TaskStatus.DONE },
+            },
+          })
+        : 0;
+
+      if (row.status !== TaskStatus.DONE && row.status !== TaskStatus.IN_PROGRESS) {
+        if (unresolvedDependencies > 0 && row.status !== TaskStatus.BLOCKED) {
+          await tx.task.update({
+            where: { id },
+            data: { status: TaskStatus.BLOCKED },
+          });
+          row.status = TaskStatus.BLOCKED;
+          dependencyStatusMessage = "Task blocked: waiting on dependencies";
+        } else if (unresolvedDependencies === 0 && row.status === TaskStatus.BLOCKED) {
+          await tx.task.update({
+            where: { id },
+            data: { status: TaskStatus.QUEUE },
+          });
+          row.status = TaskStatus.QUEUE;
+          dependencyStatusMessage = "Task unblocked: dependencies satisfied";
+        }
       }
     }
 
@@ -146,7 +175,7 @@ export async function PATCH(
       data: {
         taskId: id,
         type: "STATUS_CHANGED",
-        message: "Task dependencies updated",
+        message: dependencyStatusMessage ?? "Task dependencies updated",
         metadata: { dependencyTaskIds: normalizedDependencyTaskIds },
       },
     });

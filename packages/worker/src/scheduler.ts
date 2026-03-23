@@ -187,7 +187,7 @@ export class HoustonScheduler {
 
     const queueTasks = await db.task.findMany({
       where: {
-        status: TaskStatus.QUEUE,
+        status: { in: [TaskStatus.QUEUE, TaskStatus.BLOCKED] },
         autoDispatch: true,
         archivedAt: null,
       },
@@ -216,7 +216,44 @@ export class HoustonScheduler {
 
       const deps = task.dependencies ?? [];
       const blocked = deps.some((dep) => dep.dependsOnTask?.status !== TaskStatus.DONE);
-      if (blocked) continue;
+      if (blocked) {
+        if (task.status !== TaskStatus.BLOCKED) {
+          await db.task.update({
+            where: { id: task.id },
+            data: { status: TaskStatus.BLOCKED },
+          });
+          await db.taskEvent.create({
+            data: {
+              taskId: task.id,
+              type: "STATUS_CHANGED",
+              message: "Task blocked: waiting on dependencies",
+              metadata: {
+                semanticStatus: "BLOCKED",
+                blockingDependencyCount: deps.length,
+              },
+            },
+          });
+        }
+        continue;
+      }
+
+      if (task.status === TaskStatus.BLOCKED) {
+        await db.task.update({
+          where: { id: task.id },
+          data: { status: TaskStatus.QUEUE },
+        });
+        await db.taskEvent.create({
+          data: {
+            taskId: task.id,
+            type: "STATUS_CHANGED",
+            message: "Task unblocked: dependencies satisfied",
+            metadata: {
+              semanticStatus: "UNBLOCKED",
+              dependencyCount: deps.length,
+            },
+          },
+        });
+      }
 
       await this.boss.send("dispatch-task", {
         taskId: task.id,
@@ -384,7 +421,7 @@ export class HoustonScheduler {
     // Update tasks pending count
     const pendingCount = await db.task.count({
       where: {
-        status: { in: ["QUEUE", "IN_PROGRESS"] },
+        status: { in: ["QUEUE", "BLOCKED", "IN_PROGRESS"] },
       },
     });
     await db.systemStatus.upsert({

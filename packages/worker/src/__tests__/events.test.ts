@@ -23,6 +23,7 @@ vi.mock("@houston/shared", () => ({
   db: mockDb,
   TaskStatus: {
     QUEUE: "QUEUE",
+    BLOCKED: "BLOCKED",
     IN_PROGRESS: "IN_PROGRESS",
     DONE: "DONE",
     FAILED: "FAILED",

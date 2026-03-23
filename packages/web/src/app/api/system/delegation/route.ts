@@ -48,6 +48,7 @@ export async function GET(req: NextRequest) {
   const specialistShare = totalRuns > 0 ? specialistRuns / totalRuns : 0;
 
   const queue = await db.task.count({ where: { status: "QUEUE", archivedAt: null } });
+  const blocked = await db.task.count({ where: { status: "BLOCKED", archivedAt: null } });
   const inProgress = await db.task.count({ where: { status: "IN_PROGRESS", archivedAt: null } });
   const staleAccepted = await db.taskRun.count({
     where: {
@@ -64,6 +65,7 @@ export async function GET(req: NextRequest) {
     specialistRuns,
     specialistShare,
     queue,
+    blocked,
     inProgress,
     staleAccepted,
     avgQueueToStartMs: queueToStartSamples > 0 ? Math.round(queueToStartTotalMs / queueToStartSamples) : 0,

@@ -660,6 +660,11 @@ export class DispatchService {
       }
 
       if (requiresApproval) {
+        await db.task.update({
+          where: { id: task.id },
+          data: { status: TaskStatus.BLOCKED },
+        });
+
         await db.taskEvent.create({
           data: {
             taskId: task.id,
@@ -939,6 +944,11 @@ export class DispatchService {
       }
 
       if (requiresApproval) {
+        await db.task.update({
+          where: { id: task.id },
+          data: { status: TaskStatus.BLOCKED },
+        });
+
         await db.taskEvent.create({
           data: {
             taskId: task.id,
@@ -1063,7 +1073,7 @@ export class DispatchService {
         await db.task.update({
           where: { id: taskRun.task.id },
           data: {
-            status: TaskStatus.FAILED,
+            status: TaskStatus.BLOCKED,
           },
         });
 
@@ -1177,6 +1187,13 @@ export class DispatchService {
         });
         continue;
       }
+
+      await db.task.update({
+        where: { id: taskRun.task.id },
+        data: {
+          status: TaskStatus.QUEUE,
+        },
+      });
 
       const dispatchResult = await this.dispatchTaskRunToGateway({
         task: {

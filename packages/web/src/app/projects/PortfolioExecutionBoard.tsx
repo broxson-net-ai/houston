@@ -77,7 +77,7 @@ export default function PortfolioExecutionBoardCard({
           </div>
           {nowBucket ? (
             <p className="mb-2 text-xs text-muted-foreground">
-              {nowBucket.done}/{nowBucket.total} done · {nowBucket.inProgress} running · {nowBucket.failed} failed
+              {nowBucket.done}/{nowBucket.total} done · {nowBucket.inProgress} running · {nowBucket.blocked} blocked · {nowBucket.failed} failed
             </p>
           ) : null}
           <ul className="space-y-1 text-xs text-muted-foreground">
@@ -95,7 +95,7 @@ export default function PortfolioExecutionBoardCard({
           </div>
           {nextBucket ? (
             <p className="mb-2 text-xs text-muted-foreground">
-              {nextBucket.done}/{nextBucket.total} done · {nextBucket.inProgress} running · {nextBucket.failed} failed
+              {nextBucket.done}/{nextBucket.total} done · {nextBucket.inProgress} running · {nextBucket.blocked} blocked · {nextBucket.failed} failed
             </p>
           ) : null}
           <ul className="space-y-1 text-xs text-muted-foreground">
@@ -113,7 +113,7 @@ export default function PortfolioExecutionBoardCard({
           </div>
           {laterBucket ? (
             <p className="mb-2 text-xs text-muted-foreground">
-              {laterBucket.done}/{laterBucket.total} done · {laterBucket.inProgress} running · {laterBucket.failed} failed
+              {laterBucket.done}/{laterBucket.total} done · {laterBucket.inProgress} running · {laterBucket.blocked} blocked · {laterBucket.failed} failed
             </p>
           ) : null}
           <ul className="space-y-1 text-xs text-muted-foreground">

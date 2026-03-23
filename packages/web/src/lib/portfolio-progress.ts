@@ -6,6 +6,7 @@ export type PortfolioTaskBucketProgress = {
   prefix: "NOW" | "NEXT" | "LATER";
   total: number;
   queue: number;
+  blocked: number;
   inProgress: number;
   done: number;
   failed: number;
@@ -35,11 +36,11 @@ export type PortfolioExecutionProgress = {
 
 type TaskRow = {
   title: string;
-  status: "QUEUE" | "IN_PROGRESS" | "DONE" | "FAILED";
+  status: "QUEUE" | "BLOCKED" | "IN_PROGRESS" | "DONE" | "FAILED";
 };
 
 function emptyBucket(prefix: "NOW" | "NEXT" | "LATER"): PortfolioTaskBucketProgress {
-  return { prefix, total: 0, queue: 0, inProgress: 0, done: 0, failed: 0 };
+  return { prefix, total: 0, queue: 0, blocked: 0, inProgress: 0, done: 0, failed: 0 };
 }
 
 function bucketFromTitle(title: string): "NOW" | "NEXT" | "LATER" | null {
@@ -49,9 +50,10 @@ function bucketFromTitle(title: string): "NOW" | "NEXT" | "LATER" | null {
   return null;
 }
 
-function applyStatus(target: { total: number; queue: number; inProgress: number; done: number; failed: number }, status: TaskRow["status"]) {
+function applyStatus(target: { total: number; queue: number; inProgress: number; done: number; failed: number; blocked?: number }, status: TaskRow["status"]) {
   target.total += 1;
   if (status === "QUEUE") target.queue += 1;
+  if (status === "BLOCKED" && typeof target.blocked === "number") target.blocked += 1;
   if (status === "IN_PROGRESS") target.inProgress += 1;
   if (status === "DONE") target.done += 1;
   if (status === "FAILED") target.failed += 1;

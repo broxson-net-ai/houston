@@ -114,6 +114,7 @@ export default function NewProjectPage() {
             >
               <option value="draft">Draft</option>
               <option value="active">Active</option>
+              <option value="blocked">Blocked</option>
               <option value="paused">Paused</option>
               <option value="done">Done</option>
             </select>

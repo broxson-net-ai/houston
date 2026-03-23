@@ -44,6 +44,7 @@ type DelegationReport = {
   specialistRuns: number;
   specialistShare: number;
   queue: number;
+  blocked: number;
   inProgress: number;
   staleAccepted: number;
   avgQueueToStartMs: number;
@@ -214,8 +215,8 @@ export default function AdminPage() {
                 <div>{delegation.specialistRuns}</div>
               </div>
               <div className="border rounded p-2">
-                <div className="text-muted-foreground">Queue / In progress</div>
-                <div>{delegation.queue} / {delegation.inProgress}</div>
+                <div className="text-muted-foreground">Queue / Blocked / In progress</div>
+                <div>{delegation.queue} / {delegation.blocked} / {delegation.inProgress}</div>
               </div>
               <div className="border rounded p-2">
                 <div className="text-muted-foreground">Avg queue→start</div>

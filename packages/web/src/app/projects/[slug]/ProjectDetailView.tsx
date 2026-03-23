@@ -4,7 +4,7 @@ import { useState } from "react";
 import MarkdownPreview from "@/components/MarkdownPreview";
 import type { ProjectSummary } from "@/lib/projects";
 
-const STATUS_OPTIONS = ["active", "paused", "done", "draft", "archived"];
+const STATUS_OPTIONS = ["active", "blocked", "paused", "done", "draft", "archived"];
 const DOC_LABELS = {
   project: "Project Doc",
   actionPlan: "Action Plan",

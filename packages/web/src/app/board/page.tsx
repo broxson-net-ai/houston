@@ -33,6 +33,7 @@ type ScheduledItem = {
 
 type StatusGrouped = {
   QUEUE: Task[];
+  BLOCKED: Task[];
   IN_PROGRESS: Task[];
   DONE: Task[];
   FAILED: Task[];
@@ -41,9 +42,10 @@ type StatusGrouped = {
 
 type AgentGrouped = Record<string, Task[]>;
 
-const STATUS_COLUMNS = ["Scheduled", "Queue", "In Progress", "Done", "Failed"] as const;
+const STATUS_COLUMNS = ["Scheduled", "Queue", "Blocked", "In Progress", "Done", "Failed"] as const;
 const STATUS_MAP: Record<string, keyof Omit<StatusGrouped, "scheduled">> = {
   Queue: "QUEUE",
+  Blocked: "BLOCKED",
   "In Progress": "IN_PROGRESS",
   Done: "DONE",
   Failed: "FAILED",
@@ -52,12 +54,14 @@ const STATUS_MAP: Record<string, keyof Omit<StatusGrouped, "scheduled">> = {
 function StatusBadge({ status }: { status: string }) {
   const colors: Record<string, string> = {
     QUEUE: "bg-blue-100 text-blue-800",
+    BLOCKED: "bg-amber-100 text-amber-800",
     IN_PROGRESS: "bg-yellow-100 text-yellow-800",
     DONE: "bg-green-100 text-green-800",
     FAILED: "bg-red-100 text-red-800",
   };
   const labels: Record<string, string> = {
     QUEUE: "Queue",
+    BLOCKED: "Blocked",
     IN_PROGRESS: "In Progress",
     DONE: "Done",
     FAILED: "Failed",
@@ -233,7 +237,7 @@ function DraggableTaskCard({
 }
 
 function findTaskInStatusData(taskId: string, data: StatusGrouped): Task | undefined {
-  for (const key of ["QUEUE", "IN_PROGRESS", "DONE", "FAILED"] as const) {
+  for (const key of ["QUEUE", "BLOCKED", "IN_PROGRESS", "DONE", "FAILED"] as const) {
     const found = data[key].find((t) => t.id === taskId);
     if (found) return found;
   }
@@ -335,7 +339,7 @@ export default function BoardPage() {
     setStatusData((current) => {
       if (!current) return current;
       const updated = { ...current } as StatusGrouped;
-      for (const key of ["QUEUE", "IN_PROGRESS", "DONE", "FAILED"] as const) {
+      for (const key of ["QUEUE", "BLOCKED", "IN_PROGRESS", "DONE", "FAILED"] as const) {
         updated[key] = current[key].filter((t) => t.id !== taskId);
       }
       const newKey = newStatus as keyof Omit<StatusGrouped, "scheduled">;
@@ -450,7 +454,7 @@ export default function BoardPage() {
         {/* Status View */}
         {view === "status" && statusData && (
           <DndContext onDragStart={handleDragStart} onDragEnd={handleStatusDragEnd}>
-            <div className="grid grid-cols-5 gap-4">
+            <div className="grid grid-cols-6 gap-4">
               {/* Scheduled column — read-only, not droppable */}
               <div className="space-y-2">
                 <h2 className="font-semibold text-sm text-muted-foreground uppercase tracking-wide">
@@ -469,8 +473,8 @@ export default function BoardPage() {
                 ))}
               </div>
 
-              {/* Queue, In Progress, Done, Failed columns */}
-              {(["Queue", "In Progress", "Done", "Failed"] as const).map((col) => {
+              {/* Queue, Blocked, In Progress, Done, Failed columns */}
+              {(["Queue", "Blocked", "In Progress", "Done", "Failed"] as const).map((col) => {
                 const key = STATUS_MAP[col];
                 const items = statusData[key] ?? [];
                 return (

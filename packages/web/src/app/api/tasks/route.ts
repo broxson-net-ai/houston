@@ -121,6 +121,7 @@ export async function GET(req: NextRequest) {
     // Group tasks by status
     const grouped: Record<string, typeof tasks> = {
       QUEUE: [],
+      BLOCKED: [],
       IN_PROGRESS: [],
       DONE: [],
       FAILED: [],
@@ -178,6 +179,17 @@ export async function POST(req: NextRequest) {
     : [];
 
   const task = await db.$transaction(async (tx) => {
+    let nextStatus: TaskStatus = TaskStatus.QUEUE;
+    if (normalizedDependencyTaskIds.length > 0) {
+      const unresolvedDependencies = await tx.task.count({
+        where: {
+          id: { in: normalizedDependencyTaskIds },
+          status: { not: TaskStatus.DONE },
+        },
+      });
+      if (unresolvedDependencies > 0) nextStatus = TaskStatus.BLOCKED;
+    }
+
     const created = await tx.task.create({
       data: {
         title,
@@ -186,7 +198,7 @@ export async function POST(req: NextRequest) {
         dueAt: dueAt ? new Date(dueAt) : null,
         instructionsOverride: instructionsOverride ?? null,
         projectId: projectId ?? null,
-        status: TaskStatus.QUEUE,
+        status: nextStatus,
         autoDispatch: autoDispatch === true,
       },
       include: { agent: true, template: true, project: true },
@@ -219,6 +231,7 @@ export async function POST(req: NextRequest) {
                 ...(resolvedAgentId ? { resolvedAgentId } : {}),
                 autoDispatch: autoDispatch === true,
                 dependencyTaskIds: normalizedDependencyTaskIds,
+                ...(task.status === TaskStatus.BLOCKED ? { semanticStatus: "BLOCKED" } : {}),
               }
             : undefined,
       },

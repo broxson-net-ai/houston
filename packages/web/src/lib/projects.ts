@@ -8,7 +8,7 @@ import matter from "gray-matter";
 import { db } from "@houston/shared";
 import type { Project as PrismaProject } from "@houston/shared";
 
-export const PROJECT_STATUS_VALUES = ["active", "paused", "done", "draft", "archived"] as const;
+export const PROJECT_STATUS_VALUES = ["active", "blocked", "paused", "done", "draft", "archived"] as const;
 
 export type ProjectStatus = (typeof PROJECT_STATUS_VALUES)[number];
 
@@ -95,6 +95,7 @@ function normalizeStatus(value?: string) {
   if (!value) return undefined;
   const normalized = value.replace(/\s+/g, " ").trim().toLowerCase();
   if (/\bactive\b/.test(normalized)) return "active";
+  if (/\bblocked\b/.test(normalized)) return "blocked";
   if (/\bpaused\b/.test(normalized)) return "paused";
   if (/\bdone\b|\bcomplete(?:d)?\b/.test(normalized)) return "done";
   if (/\barchiv(?:e|ed|ing)\b/.test(normalized)) return "archived";
@@ -361,7 +362,7 @@ export async function listProjectsWithCounts(
     const slug = projects.find((p) => tags.includes(tagForProject(p.slug)))?.slug;
     if (!slug) return;
     taskCounts.set(slug, (taskCounts.get(slug) ?? 0) + 1);
-    if (!task.archivedAt && (task.status === "QUEUE" || task.status === "IN_PROGRESS")) {
+    if (!task.archivedAt && (task.status === "QUEUE" || task.status === "BLOCKED" || task.status === "IN_PROGRESS")) {
       openTaskCounts.set(slug, (openTaskCounts.get(slug) ?? 0) + 1);
     }
   });
