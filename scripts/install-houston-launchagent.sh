@@ -30,7 +30,7 @@ cat > "$PLIST_WEB" <<EOF
     <array>
       <string>/bin/zsh</string>
       <string>-lc</string>
-      <string>cd ${ROOT_DIR} && npm run start -w packages/web</string>
+      <string>cd ${ROOT_DIR}; export PATH=/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin; npx dotenv -e .env -- npm run start -w packages/web</string>
     </array>
 
     <key>RunAtLoad</key>
@@ -63,7 +63,7 @@ cat > "$PLIST_WORKER" <<EOF
     <array>
       <string>/bin/zsh</string>
       <string>-lc</string>
-      <string>cd ${ROOT_DIR} && npm run start -w packages/worker</string>
+      <string>cd ${ROOT_DIR}; export PATH=/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin; npx dotenv -e .env -- npm run start -w packages/worker</string>
     </array>
 
     <key>RunAtLoad</key>
@@ -92,10 +92,11 @@ for label in "$LABEL_WEB" "$LABEL_WORKER"; do
   launchctl bootout "gui/$(id -u)/${label}" >/dev/null 2>&1 || true
 done
 
+launchctl enable "gui/$(id -u)/${LABEL_WEB}" >/dev/null 2>&1 || true
+launchctl enable "gui/$(id -u)/${LABEL_WORKER}" >/dev/null 2>&1 || true
+
 launchctl bootstrap "gui/$(id -u)" "$PLIST_WEB"
 launchctl bootstrap "gui/$(id -u)" "$PLIST_WORKER"
-launchctl enable "gui/$(id -u)/${LABEL_WEB}"
-launchctl enable "gui/$(id -u)/${LABEL_WORKER}"
 launchctl kickstart -k "gui/$(id -u)/${LABEL_WEB}"
 launchctl kickstart -k "gui/$(id -u)/${LABEL_WORKER}"
 
