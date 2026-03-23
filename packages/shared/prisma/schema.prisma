@@ -139,6 +139,8 @@ model Task {
   dueAt                        DateTime?
   status                       TaskStatus  @default(QUEUE)
   autoDispatch                 Boolean     @default(false)
+  autonomyTier                 String?
+  dataClass                    String?
   projectId                    String?
   project                      Project?     @relation(fields: [projectId], references: [id])
   instructionsOverride         String?
