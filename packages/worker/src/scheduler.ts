@@ -10,6 +10,7 @@ import { createGzip } from "zlib";
 import { createHash } from "crypto";
 import { pipeline } from "stream/promises";
 import { Readable } from "stream";
+import { getPortfolioSyncControl, runPortfolioSync } from "@houston/shared";
 
 const parseCronExpression = (cronParser as any).parseExpression;
 
@@ -40,6 +41,10 @@ const APPROVAL_AUDIT_ARCHIVE_DIR =
   path.join(os.homedir(), ".openclaw", "workspace", "state", "approval-audit-archive");
 const STALE_ACCEPTED_MINUTES = parseInt(
   process.env.HOUSTON_STALE_ACCEPTED_MINUTES ?? "30",
+  10
+);
+const PORTFOLIO_SYNC_INTERVAL_MS = parseInt(
+  process.env.HOUSTON_PORTFOLIO_SYNC_INTERVAL_MS ?? "60000",
   10
 );
 
@@ -88,6 +93,7 @@ export class HoustonScheduler {
   private boss?: PgBoss;
   private tickTimer?: ReturnType<typeof setInterval>;
   private running = false;
+  private lastPortfolioSyncAtMs = 0;
 
   constructor(private dispatchService: DispatchService) {}
 
@@ -175,11 +181,40 @@ export class HoustonScheduler {
     }
 
     try {
+      await this.runPortfolioSyncIfDue(now);
+    } catch (err) {
+      const errorText = err instanceof Error ? err.message : String(err);
+      console.error(`[scheduler] Failed portfolio sync pass: ${errorText}`);
+    }
+
+    try {
       await this.updateSystemStatus();
     } catch (err) {
       const errorText = err instanceof Error ? err.message : String(err);
       console.error(`[scheduler] Failed to update system status: ${errorText}`);
     }
+  }
+
+  private async runPortfolioSyncIfDue(now: Date): Promise<void> {
+    if (PORTFOLIO_SYNC_INTERVAL_MS <= 0) return;
+    if (
+      this.lastPortfolioSyncAtMs > 0 &&
+      now.getTime() - this.lastPortfolioSyncAtMs < PORTFOLIO_SYNC_INTERVAL_MS
+    ) {
+      return;
+    }
+
+    this.lastPortfolioSyncAtMs = now.getTime();
+    const control = await getPortfolioSyncControl();
+    if (!control.enabled) {
+      return;
+    }
+
+    const report = await runPortfolioSync({ updatedBy: "worker-scheduler" });
+    console.log(
+      `[scheduler] Portfolio sync ok: projects +${report.createdProjects}/${report.reusedProjects} ` +
+        `tasks +${report.createdTasks} updated ${report.updatedTasks} deps +${report.dependencyEdgesCreated}`
+    );
   }
 
   private async dispatchReadyAutoTasks(): Promise<void> {

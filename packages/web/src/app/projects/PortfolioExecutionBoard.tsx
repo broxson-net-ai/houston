@@ -1,6 +1,7 @@
 import type { PortfolioExecutionBoard } from "@/lib/portfolio-execution";
 import type { PortfolioExecutionProgress } from "@/lib/portfolio-progress";
 import Link from "next/link";
+import PortfolioProcessingControls from "./PortfolioProcessingControls";
 
 function pct(done: number, total: number) {
   if (!total) return 0;
@@ -34,6 +35,7 @@ export default function PortfolioExecutionBoardCard({
           <p className="text-sm text-muted-foreground">
             Canonical cross-project execution board from <code>PORTFOLIO_EXECUTION.md</code>.
           </p>
+          <PortfolioProcessingControls />
         </div>
         <div className="grid grid-cols-2 gap-2 text-xs md:grid-cols-3">
           <div className="rounded-md border px-3 py-2">
