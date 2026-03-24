@@ -18,36 +18,58 @@ function getMaxLogBytes(): number {
 
 export class GatewayEventHandler {
   private logSizes = new Map<string, number>(); // taskRunId → current log size
+  private logEntryIds = new Map<string, string>(); // taskRunId → taskLogId
+  private runQueues = new Map<string, Promise<void>>(); // gatewayRunId → serial queue
+  private unresolvedRuns = new Set<string>();
 
   constructor(private gatewayClient: GatewayClient) {}
 
   start() {
     this.gatewayClient.on("event", (event: GatewayEvent) => {
-      this.handleEvent(event).catch((err) => {
+      const eventName = (event as any).event as string | undefined;
+      const payload = (event as any).payload as any;
+      const gatewayRunId = payload?.runId as string | undefined;
+
+      if (eventName !== "agent" || !gatewayRunId) {
+        return;
+      }
+
+      this.enqueueRunEvent(gatewayRunId, async () => {
+        await this.handleEvent(event, gatewayRunId);
+      }).catch((err) => {
         const errorText = err instanceof Error ? err.message : String(err);
         console.error(`[events] Error handling event: ${errorText}`);
       });
     });
   }
 
-  private async handleEvent(event: GatewayEvent): Promise<void> {
-    // Expect OpenClaw event framing
-    const eventName = (event as any).event as string | undefined;
+  private enqueueRunEvent(gatewayRunId: string, fn: () => Promise<void>) {
+    const previous = this.runQueues.get(gatewayRunId) ?? Promise.resolve();
+    const next = previous
+      .catch(() => undefined)
+      .then(fn)
+      .finally(() => {
+        if (this.runQueues.get(gatewayRunId) === next) {
+          this.runQueues.delete(gatewayRunId);
+        }
+      });
+    this.runQueues.set(gatewayRunId, next);
+    return next;
+  }
+
+  private async handleEvent(event: GatewayEvent, gatewayRunId: string): Promise<void> {
     const payload = (event as any).payload as any;
 
-    if (eventName !== "agent") return;
-    const gatewayRunId = payload?.runId as string | undefined;
-    if (!gatewayRunId) return;
-
-    const taskRun = await db.taskRun.findFirst({
-      where: { gatewayRunId },
-      include: { task: true },
-    });
-
+    const taskRun = await this.findTaskRunWithRetry(gatewayRunId);
     if (!taskRun) {
-      console.warn(`[events] No task run found for gatewayRunId: ${gatewayRunId}`);
+      if (!this.unresolvedRuns.has(gatewayRunId)) {
+        this.unresolvedRuns.add(gatewayRunId);
+        console.warn(`[events] No task run found for gatewayRunId after retry: ${gatewayRunId}`);
+      }
       return;
     }
+
+    this.unresolvedRuns.delete(gatewayRunId);
 
     const stream = payload?.stream as string | undefined;
     const data = payload?.data as any;
@@ -138,14 +160,25 @@ export class GatewayEventHandler {
       const MAX_LOG_BYTES = getMaxLogBytes();
       if (currentSize >= MAX_LOG_BYTES) return;
 
-      let logEntry = await db.taskLog.findFirst({
-        where: { taskRunId: taskRun.id },
-        orderBy: { createdAt: "desc" },
-      });
-      if (!logEntry) {
-        logEntry = await db.taskLog.create({
-          data: { taskRunId: taskRun.id, logText: "", truncated: false },
+      let logEntryId = this.logEntryIds.get(taskRun.id);
+      if (!logEntryId) {
+        const existingLog = await db.taskLog.findFirst({
+          where: { taskRunId: taskRun.id },
+          orderBy: { createdAt: "desc" },
+          select: { id: true },
         });
+
+        if (existingLog) {
+          logEntryId = existingLog.id;
+        } else {
+          const createdLog = await db.taskLog.create({
+            data: { taskRunId: taskRun.id, logText: "", truncated: false },
+            select: { id: true },
+          });
+          logEntryId = createdLog.id;
+        }
+
+        this.logEntryIds.set(taskRun.id, logEntryId);
       }
 
       const newSize = currentSize + chunkSize;
@@ -154,14 +187,32 @@ export class GatewayEventHandler {
         ? text.slice(0, MAX_LOG_BYTES - currentSize)
         : text;
 
-      await db.taskLog.update({
-        where: { id: logEntry.id },
-        data: { logText: logEntry.logText + appendText, truncated },
-      });
+      await db.$executeRaw`
+        UPDATE task_logs
+        SET "logText" = "logText" || ${appendText},
+            truncated = ${truncated}
+        WHERE id = ${logEntryId}
+      `;
 
       this.logSizes.set(taskRun.id, Math.min(newSize, MAX_LOG_BYTES));
       return;
     }
+  }
+
+  private async findTaskRunWithRetry(gatewayRunId: string) {
+    for (let attempt = 0; attempt < 6; attempt += 1) {
+      const taskRun = await db.taskRun.findFirst({
+        where: { gatewayRunId },
+        include: { task: true },
+      });
+      if (taskRun) {
+        return taskRun;
+      }
+      if (attempt < 5) {
+        await new Promise((resolve) => setTimeout(resolve, 250));
+      }
+    }
+    return null;
   }
 
   /**
