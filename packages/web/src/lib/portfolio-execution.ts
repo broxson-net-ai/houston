@@ -16,10 +16,15 @@ export type PortfolioGate = {
   owners: string[];
 };
 
+export type PortfolioQueueItem = {
+  text: string;
+  controlOnly: boolean;
+};
+
 export type PortfolioExecutionQueue = {
-  now: string[];
-  next: string[];
-  later: string[];
+  now: PortfolioQueueItem[];
+  next: PortfolioQueueItem[];
+  later: PortfolioQueueItem[];
 };
 
 export type PortfolioExecutionBoard = {
@@ -188,6 +193,10 @@ function parseGates(contents: string): PortfolioGate[] {
   return gates;
 }
 
+function isControlOnlyQueueItem(text: string) {
+  return /^Create Houston tasks from /i.test(text);
+}
+
 function parseQueue(contents: string): PortfolioExecutionQueue {
   const lines = sectionLinesByPrefix(contents, "6) now / next / later board");
   const buckets: PortfolioExecutionQueue = { now: [], next: [], later: [] };
@@ -209,7 +218,13 @@ function parseQueue(contents: string): PortfolioExecutionQueue {
       continue;
     }
     const item = line.match(/^\d+\.\s+(.+)$/) || line.match(/^[-*]\s+(.+)$/);
-    if (item && current) buckets[current].push(item[1].trim());
+    if (item && current) {
+      const text = item[1].trim();
+      buckets[current].push({
+        text,
+        controlOnly: isControlOnlyQueueItem(text),
+      });
+    }
   }
 
   return buckets;

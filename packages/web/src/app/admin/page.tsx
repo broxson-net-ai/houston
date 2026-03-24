@@ -59,12 +59,37 @@ type SeedReport = {
   missingTitles: string[];
 };
 
+type PortfolioSyncState = {
+  control: {
+    enabled: boolean;
+    updatedAt?: string;
+    updatedBy?: string;
+  };
+  report: {
+    ranAt?: string;
+    createdTasks?: number;
+    updatedTasks?: number;
+    createdProjects?: number;
+    reusedProjects?: number;
+    eligibleAutoDispatchTasks?: number;
+    dependencyEdgesCreated?: number;
+    dependencyEdgesReused?: number;
+    skippedQueueItems?: string[];
+    queueSummary?: {
+      nowItems?: number;
+      nextItems?: number;
+      laterItems?: number;
+    };
+  } | null;
+};
+
 export default function AdminPage() {
   const [statuses, setStatuses] = useState<Record<string, SystemStatus>>({});
   const [health, setHealth] = useState<Record<string, string>>({});
   const [auditOps, setAuditOps] = useState<ApprovalAuditOpsReport | null>(null);
   const [delegation, setDelegation] = useState<DelegationReport | null>(null);
   const [seedReport, setSeedReport] = useState<SeedReport | null>(null);
+  const [portfolioSync, setPortfolioSync] = useState<PortfolioSyncState | null>(null);
   const [seeding, setSeeding] = useState<"dry" | "apply" | null>(null);
   const [seedError, setSeedError] = useState<string | null>(null);
 
@@ -78,6 +103,10 @@ export default function AdminPage() {
     fetch("/api/system/delegation?windowHours=24")
       .then((r) => r.json())
       .then(setDelegation)
+      .catch(() => null);
+    fetch("/api/system/portfolio-sync")
+      .then((r) => r.json())
+      .then(setPortfolioSync)
       .catch(() => null);
 
     // Would fetch system_status from an API in production
@@ -134,6 +163,69 @@ export default function AdminPage() {
             </p>
           </div>
         </div>
+
+        {portfolioSync && (
+          <div className="border rounded-lg p-4 space-y-3">
+            <div className="flex items-center justify-between">
+              <h2 className="font-semibold">Portfolio Sync Diagnostics</h2>
+              <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
+                portfolioSync.control.enabled
+                  ? "bg-green-100 text-green-800"
+                  : "bg-amber-100 text-amber-800"
+              }`}>
+                {portfolioSync.control.enabled ? "Auto-processing enabled" : "Paused for maintenance"}
+              </span>
+            </div>
+
+            <div className="grid grid-cols-2 md:grid-cols-5 gap-2 text-xs">
+              <div className="border rounded p-2">
+                <div className="text-muted-foreground">Last sync</div>
+                <div>{portfolioSync.report?.ranAt ? new Date(portfolioSync.report.ranAt).toLocaleString() : "-"}</div>
+              </div>
+              <div className="border rounded p-2">
+                <div className="text-muted-foreground">Projects + / reused</div>
+                <div>{portfolioSync.report?.createdProjects ?? 0} / {portfolioSync.report?.reusedProjects ?? 0}</div>
+              </div>
+              <div className="border rounded p-2">
+                <div className="text-muted-foreground">Tasks + / updated</div>
+                <div>{portfolioSync.report?.createdTasks ?? 0} / {portfolioSync.report?.updatedTasks ?? 0}</div>
+              </div>
+              <div className="border rounded p-2">
+                <div className="text-muted-foreground">Eligible auto-run</div>
+                <div>{portfolioSync.report?.eligibleAutoDispatchTasks ?? 0}</div>
+              </div>
+              <div className="border rounded p-2">
+                <div className="text-muted-foreground">Dependency edges + / reused</div>
+                <div>{portfolioSync.report?.dependencyEdgesCreated ?? 0} / {portfolioSync.report?.dependencyEdgesReused ?? 0}</div>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-xs">
+              <div className="border rounded p-2">
+                <div className="font-medium mb-1">Queue Summary</div>
+                <div className="text-muted-foreground">
+                  NOW {portfolioSync.report?.queueSummary?.nowItems ?? 0} · NEXT {portfolioSync.report?.queueSummary?.nextItems ?? 0} · LATER {portfolioSync.report?.queueSummary?.laterItems ?? 0}
+                </div>
+              </div>
+              <div className="border rounded p-2">
+                <div className="font-medium mb-1">Last control update</div>
+                <div className="text-muted-foreground">
+                  {portfolioSync.control.updatedAt ? new Date(portfolioSync.control.updatedAt).toLocaleString() : "-"}
+                  {portfolioSync.control.updatedBy ? ` by ${portfolioSync.control.updatedBy}` : ""}
+                </div>
+              </div>
+            </div>
+
+            <div className="border rounded p-2 text-xs">
+              <div className="font-medium mb-1">Skipped Items</div>
+              <div className="text-muted-foreground">
+                {portfolioSync.report?.skippedQueueItems?.length
+                  ? portfolioSync.report.skippedQueueItems.join(" · ")
+                  : "None"}
+              </div>
+            </div>
+          </div>
+        )}
 
         {auditOps && (
           <div className="border rounded-lg p-4 space-y-3">

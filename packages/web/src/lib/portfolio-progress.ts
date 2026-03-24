@@ -1,7 +1,7 @@
 import "server-only";
 
 import { db } from "@houston/shared";
-import type { PortfolioExecutionBoard } from "./portfolio-execution";
+import type { PortfolioExecutionBoard, PortfolioQueueItem } from "./portfolio-execution";
 
 export type PortfolioTaskBucketProgress = {
   prefix: "NOW" | "NEXT" | "LATER";
@@ -59,6 +59,10 @@ function queueKey(title: string) {
   return taskCode(title) ?? title.trim().toLowerCase();
 }
 
+function executableQueueItems(items: PortfolioQueueItem[]) {
+  return items.filter((item) => !item.controlOnly);
+}
+
 function applyStatus(target: { total: number; queue: number; inProgress: number; done: number; failed: number; blocked?: number }, status: TaskRow["status"]) {
   target.total += 1;
   if (status === "QUEUE") target.queue += 1;
@@ -99,9 +103,9 @@ export async function getPortfolioExecutionProgress(
   };
 
   const allowedKeys = {
-    NOW: new Set(board.queue.now.map((item) => queueKey(item))),
-    NEXT: new Set(board.queue.next.map((item) => queueKey(item))),
-    LATER: new Set(board.queue.later.map((item) => queueKey(item))),
+    NOW: new Set(executableQueueItems(board.queue.now).map((item) => queueKey(item.text))),
+    NEXT: new Set(executableQueueItems(board.queue.next).map((item) => queueKey(item.text))),
+    LATER: new Set(executableQueueItems(board.queue.later).map((item) => queueKey(item.text))),
   };
   const seenKeys = {
     NOW: new Set<string>(),

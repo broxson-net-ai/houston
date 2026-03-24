@@ -26,6 +26,10 @@ export default function PortfolioExecutionBoardCard({
   const nowBucket = getBucket(progress, "NOW");
   const nextBucket = getBucket(progress, "NEXT");
   const laterBucket = getBucket(progress, "LATER");
+  const controlOnlyNow = board.queue.now.filter((item) => item.controlOnly);
+  const executableNow = board.queue.now.filter((item) => !item.controlOnly);
+  const executableNext = board.queue.next.filter((item) => !item.controlOnly);
+  const executableLater = board.queue.later.filter((item) => !item.controlOnly);
 
   return (
     <section className="mb-8 rounded-xl border bg-card p-5 shadow-sm">
@@ -68,8 +72,26 @@ export default function PortfolioExecutionBoardCard({
               {nowBucket ? `${nowBucket.done}/${nowBucket.total}` : "0/0"}
             </div>
           </div>
+          <div className="rounded-md border px-3 py-2">
+            <div className="text-muted-foreground">Control items</div>
+            <div className="font-medium">{controlOnlyNow.length}</div>
+          </div>
         </div>
       </div>
+
+      {controlOnlyNow.length > 0 ? (
+        <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">
+          <div className="mb-1 font-semibold">Control-Only Items</div>
+          <ul className="space-y-1">
+            {controlOnlyNow.map((item) => (
+              <li key={item.text}>{item.text}</li>
+            ))}
+          </ul>
+          <p className="mt-2 text-amber-800">
+            These are operator/control workflow items. They inform the board but are not counted as executable queue tasks.
+          </p>
+        </div>
+      ) : null}
 
       <div className="mt-5 grid gap-4 lg:grid-cols-3">
         <div className="rounded-lg border p-3">
@@ -83,10 +105,10 @@ export default function PortfolioExecutionBoardCard({
             </p>
           ) : null}
           <ul className="space-y-1 text-xs text-muted-foreground">
-            {board.queue.now.map((item) => (
-              <li key={item}>{item}</li>
+            {executableNow.map((item) => (
+              <li key={item.text}>{item.text}</li>
             ))}
-            {board.queue.now.length === 0 ? <li>None</li> : null}
+            {executableNow.length === 0 ? <li>None</li> : null}
           </ul>
         </div>
 
@@ -101,10 +123,10 @@ export default function PortfolioExecutionBoardCard({
             </p>
           ) : null}
           <ul className="space-y-1 text-xs text-muted-foreground">
-            {board.queue.next.map((item) => (
-              <li key={item}>{item}</li>
+            {executableNext.map((item) => (
+              <li key={item.text}>{item.text}</li>
             ))}
-            {board.queue.next.length === 0 ? <li>None</li> : null}
+            {executableNext.length === 0 ? <li>None</li> : null}
           </ul>
         </div>
 
@@ -119,10 +141,10 @@ export default function PortfolioExecutionBoardCard({
             </p>
           ) : null}
           <ul className="space-y-1 text-xs text-muted-foreground">
-            {board.queue.later.map((item) => (
-              <li key={item}>{item}</li>
+            {executableLater.map((item) => (
+              <li key={item.text}>{item.text}</li>
             ))}
-            {board.queue.later.length === 0 ? <li>None</li> : null}
+            {executableLater.length === 0 ? <li>None</li> : null}
           </ul>
         </div>
       </div>
