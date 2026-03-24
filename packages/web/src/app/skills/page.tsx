@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { Nav } from "@/components/nav";
 import MarkdownPreview from "@/components/MarkdownPreview";
+import SkillUsageView from "./SkillUsageView";
 
 type Skill = {
   id: string;
@@ -63,7 +64,7 @@ export default function SkillsPage() {
   return (
     <div className="min-h-screen bg-background">
       <Nav />
-      <div className="container mx-auto max-w-6xl px-4 py-6 space-y-6">
+      <div className="container mx-auto max-w-6xl space-y-8 px-4 py-6">
         <div className="space-y-2">
           <h1 className="text-3xl font-bold">Skills Registry</h1>
           <p className="text-muted-foreground">
@@ -71,65 +72,76 @@ export default function SkillsPage() {
           </p>
         </div>
 
-        <input
-          className="w-full max-w-md rounded-md border bg-background px-3 py-2 text-sm"
-          placeholder="Search skills..."
-          value={query}
-          onChange={(event) => setQuery(event.target.value)}
-        />
+        <SkillUsageView />
 
-        {error && !selectedSkill && (
-          <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-red-800 dark:border-red-900 dark:bg-red-950 dark:text-red-200">
-            {error}
-          </div>
-        )}
-
-        <div className="grid gap-6 md:grid-cols-2 xl:grid-cols-3">
-          {filtered.map((skill) => (
-            <div
-              key={skill.id}
-              className="flex h-full flex-col justify-between rounded-lg border bg-card p-5 shadow-sm hover:shadow-md transition-shadow"
-            >
-              <div className="space-y-3">
-                <div>
-                  <h3 className="text-lg font-semibold font-mono">{skill.name}</h3>
-                  <p className="text-xs text-muted-foreground">{skill.name}</p>
-                </div>
-                {skill.summary ? (
-                  <p className="text-sm text-muted-foreground">{skill.summary}</p>
-                ) : (
-                  <p className="text-sm text-muted-foreground italic">No summary available</p>
-                )}
-                <div className="text-xs text-muted-foreground space-y-1">
-                  <div className="font-mono text-xs truncate" title={skill.path}>
-                    {skill.path}
-                  </div>
-                  <div>Last scanned: {new Date(skill.lastScannedAt).toLocaleString()}</div>
-                </div>
-              </div>
-              <div className="mt-4">
-                <button
-                  onClick={() => viewSkill(skill)}
-                  className="w-full rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90 transition-opacity"
-                >
-                  View SKILL.md
-                </button>
-              </div>
+        <section className="space-y-4">
+          <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+            <div>
+              <h2 className="text-xl font-semibold">Registered Skills</h2>
+              <p className="text-sm text-muted-foreground">
+                Browse scanned `SKILL.md` files and inspect the current registry snapshot.
+              </p>
             </div>
-          ))}
-        </div>
-
-        {filtered.length === 0 && !error && (
-          <div className="rounded-lg border border-dashed p-12 text-center text-muted-foreground">
-            {skills.length === 0
-              ? "No skills found. Make sure OPENCLAW_SKILLS_PATH is configured."
-              : "No skills match your search."}
+            <input
+              className="w-full max-w-md rounded-md border bg-background px-3 py-2 text-sm"
+              placeholder="Search skills..."
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+            />
           </div>
-        )}
+
+          {error && !selectedSkill ? (
+            <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-red-800 dark:border-red-900 dark:bg-red-950 dark:text-red-200">
+              {error}
+            </div>
+          ) : null}
+
+          <div className="grid gap-6 md:grid-cols-2 xl:grid-cols-3">
+            {filtered.map((skill) => (
+              <div
+                key={skill.id}
+                className="flex h-full flex-col justify-between rounded-lg border bg-card p-5 shadow-sm transition-shadow hover:shadow-md"
+              >
+                <div className="space-y-3">
+                  <div>
+                    <h3 className="font-mono text-lg font-semibold">{skill.name}</h3>
+                    <p className="text-xs text-muted-foreground">{skill.name}</p>
+                  </div>
+                  {skill.summary ? (
+                    <p className="text-sm text-muted-foreground">{skill.summary}</p>
+                  ) : (
+                    <p className="text-sm italic text-muted-foreground">No summary available</p>
+                  )}
+                  <div className="space-y-1 text-xs text-muted-foreground">
+                    <div className="truncate font-mono text-xs" title={skill.path}>
+                      {skill.path}
+                    </div>
+                    <div>Last scanned: {new Date(skill.lastScannedAt).toLocaleString()}</div>
+                  </div>
+                </div>
+                <div className="mt-4">
+                  <button
+                    onClick={() => viewSkill(skill)}
+                    className="w-full rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-opacity hover:opacity-90"
+                  >
+                    View SKILL.md
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {filtered.length === 0 && !error ? (
+            <div className="rounded-lg border border-dashed p-12 text-center text-muted-foreground">
+              {skills.length === 0
+                ? "No skills found. Make sure OPENCLAW_SKILLS_PATH is configured."
+                : "No skills match your search."}
+            </div>
+          ) : null}
+        </section>
       </div>
 
-      {/* Modal for viewing SKILL.md */}
-      {selectedSkill && (
+      {selectedSkill ? (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
           onClick={closeModal}
@@ -140,8 +152,8 @@ export default function SkillsPage() {
           >
             <div className="mb-4 flex items-center justify-between">
               <div>
-                <h2 className="text-2xl font-bold font-mono">{selectedSkill.name}</h2>
-                <p className="text-sm text-muted-foreground font-mono">{selectedSkill.path}</p>
+                <h2 className="font-mono text-2xl font-bold">{selectedSkill.name}</h2>
+                <p className="font-mono text-sm text-muted-foreground">{selectedSkill.path}</p>
               </div>
               <button
                 onClick={closeModal}
@@ -150,22 +162,20 @@ export default function SkillsPage() {
                 Close
               </button>
             </div>
-            {loadingContent && (
+            {loadingContent ? (
               <div className="flex items-center justify-center py-12 text-muted-foreground">
                 Loading...
               </div>
-            )}
-            {error && selectedSkill && (
+            ) : null}
+            {error && selectedSkill ? (
               <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-red-800 dark:border-red-900 dark:bg-red-950 dark:text-red-200">
                 {error}
               </div>
-            )}
-            {!loadingContent && !error && skillContent && (
-              <MarkdownPreview content={skillContent} />
-            )}
+            ) : null}
+            {!loadingContent && !error && skillContent ? <MarkdownPreview content={skillContent} /> : null}
           </div>
         </div>
-      )}
+      ) : null}
     </div>
   );
 }
