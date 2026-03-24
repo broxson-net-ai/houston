@@ -341,11 +341,15 @@ export async function runPortfolioSync(options?: { updatedBy?: string; force?: b
 
     const existingTask =
       (await db.task.findFirst({
-        where: { title: spec.title },
+        where: {
+          archivedAt: null,
+          title: spec.title,
+        },
         select: { id: true, status: true, title: true },
       })) ??
       (await db.task.findFirst({
         where: {
+          archivedAt: null,
           title: {
             startsWith: `${spec.queuePrefix} ${spec.code} `,
           },
