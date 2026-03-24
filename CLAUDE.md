@@ -10,15 +10,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 - **web**: Next.js (UI + API routes)
 - **worker**: Houston Scheduler + dispatcher + gateway WS client (Node.js service)
-- **postgres**: persistent storage
-- **redis**: async job queue
+- **postgres**: persistent storage + async job queue via **pg-boss** (no Redis)
 - Deployed via `docker-compose`; single command: `docker compose up -d`
 
 ## Architecture
 
 ### Services
 
-The system is split into two containers beyond postgres/redis:
+The system is split into two containers beyond postgres:
 
 1. **web** — Next.js app serving the UI and all `/api/*` REST endpoints
 2. **worker** — background service running three internal modules:
@@ -67,7 +66,6 @@ See `.env.example` (to be created). Key vars:
 
 ```
 DATABASE_URL=postgres://...
-REDIS_URL=redis://...
 APP_BASE_URL=http://localhost:3000
 OPENCLAW_GATEWAY_URL=ws://host.docker.internal:18789
 OPENCLAW_GATEWAY_TOKEN=...
@@ -85,7 +83,7 @@ Skills are read from the filesystem: `OPENCLAW_SKILLS_PATH/<skill>/SKILL.md`. Ho
 ## Health Endpoints
 
 - `GET /healthz` — process health
-- `GET /readyz` — db + redis + gateway connectivity
+- `GET /readyz` — db + gateway connectivity
 
 ## Board Views
 
