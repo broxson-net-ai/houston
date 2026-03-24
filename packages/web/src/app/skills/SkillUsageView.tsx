@@ -116,6 +116,7 @@ export default function SkillUsageView() {
   }, []);
 
   const topSkill = useMemo(() => data?.bySkill[0] ?? null, [data]);
+  const topSkills = useMemo(() => data?.bySkill.slice(0, 10) ?? [], [data]);
 
   if (loading) {
     return <div className="rounded-lg border bg-card p-6 text-sm text-muted-foreground">Loading usage telemetry...</div>;
@@ -156,7 +157,7 @@ export default function SkillUsageView() {
       </div>
 
       <div className="grid gap-6 xl:grid-cols-2">
-        <UsageBars title="Top Skills" rows={data.bySkill} empty="No skill invocations recorded yet." />
+        <UsageBars title="Top Skills" rows={topSkills} empty="No skill invocations recorded yet." />
         <UsageBars title="Usage by Agent" rows={data.byAgent} empty="No agent usage records available yet." />
       </div>
     </section>

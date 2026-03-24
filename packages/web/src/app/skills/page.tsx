@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Nav } from "@/components/nav";
 import MarkdownPreview from "@/components/MarkdownPreview";
 import SkillUsageView from "./SkillUsageView";
@@ -14,8 +14,26 @@ type Skill = {
   hash: string;
 };
 
+type SkillUsageResponse = {
+  totalEvents: number;
+  eventsLast24h: number;
+  bySkill: Array<{
+    skill_name: string;
+    count: number;
+    last_used: string;
+  }>;
+  byAgent: Array<{
+    agent_id: string;
+    count: number;
+    last_used: string;
+  }>;
+  degraded: boolean;
+  degradedReason?: string;
+};
+
 export default function SkillsPage() {
   const [skills, setSkills] = useState<Skill[]>([]);
+  const [usage, setUsage] = useState<SkillUsageResponse | null>(null);
   const [query, setQuery] = useState("");
   const [selectedSkill, setSelectedSkill] = useState<Skill | null>(null);
   const [skillContent, setSkillContent] = useState<string>("");
@@ -30,7 +48,19 @@ export default function SkillsPage() {
         console.error("Failed to fetch skills:", err);
         setError("Failed to load skills");
       });
+
+    fetch("/api/skills/usage")
+      .then((r) => r.json())
+      .then(setUsage)
+      .catch((err) => {
+        console.error("Failed to fetch skill usage:", err);
+      });
   }, []);
+
+  const usageBySkill = useMemo(() => {
+    const entries = usage?.bySkill ?? [];
+    return new Map(entries.map((entry) => [entry.skill_name, entry]));
+  }, [usage]);
 
   const filtered = skills.filter((s) =>
     !query ||
@@ -97,38 +127,60 @@ export default function SkillsPage() {
           ) : null}
 
           <div className="grid gap-6 md:grid-cols-2 xl:grid-cols-3">
-            {filtered.map((skill) => (
-              <div
-                key={skill.id}
-                className="flex h-full flex-col justify-between rounded-lg border bg-card p-5 shadow-sm transition-shadow hover:shadow-md"
-              >
-                <div className="space-y-3">
-                  <div>
-                    <h3 className="font-mono text-lg font-semibold">{skill.name}</h3>
-                    <p className="text-xs text-muted-foreground">{skill.name}</p>
-                  </div>
-                  {skill.summary ? (
-                    <p className="text-sm text-muted-foreground">{skill.summary}</p>
-                  ) : (
-                    <p className="text-sm italic text-muted-foreground">No summary available</p>
-                  )}
-                  <div className="space-y-1 text-xs text-muted-foreground">
-                    <div className="truncate font-mono text-xs" title={skill.path}>
-                      {skill.path}
+            {filtered.map((skill) => {
+              const usageEntry = usageBySkill.get(skill.name);
+              const usageCount = usageEntry?.count ?? 0;
+              const hasUsage = usageCount > 0;
+
+              return (
+                <div
+                  key={skill.id}
+                  className="flex h-full flex-col justify-between rounded-lg border bg-card p-5 shadow-sm transition-shadow hover:shadow-md"
+                >
+                  <div className="space-y-3">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <h3 className="font-mono text-lg font-semibold">{skill.name}</h3>
+                        <p className="text-xs text-muted-foreground">{skill.name}</p>
+                      </div>
+                      <div
+                        className={`rounded-full border px-2.5 py-1 text-xs font-medium ${
+                          hasUsage
+                            ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                            : "border-amber-200 bg-amber-50 text-amber-700"
+                        }`}
+                        title={hasUsage && usageEntry?.last_used ? `Last used ${new Date(usageEntry.last_used).toLocaleString()}` : "No recorded usage yet"}
+                      >
+                        {usageCount.toLocaleString()} uses
+                      </div>
                     </div>
-                    <div>Last scanned: {new Date(skill.lastScannedAt).toLocaleString()}</div>
+                    {skill.summary ? (
+                      <p className="text-sm text-muted-foreground">{skill.summary}</p>
+                    ) : (
+                      <p className="text-sm italic text-muted-foreground">No summary available</p>
+                    )}
+                    <div className="space-y-1 text-xs text-muted-foreground">
+                      <div className="truncate font-mono text-xs" title={skill.path}>
+                        {skill.path}
+                      </div>
+                      <div>Last scanned: {new Date(skill.lastScannedAt).toLocaleString()}</div>
+                      <div>
+                        Usage window: all recorded events
+                        {hasUsage && usageEntry?.last_used ? ` • last used ${new Date(usageEntry.last_used).toLocaleString()}` : " • no activity recorded"}
+                      </div>
+                    </div>
+                  </div>
+                  <div className="mt-4">
+                    <button
+                      onClick={() => viewSkill(skill)}
+                      className="w-full rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-opacity hover:opacity-90"
+                    >
+                      View SKILL.md
+                    </button>
                   </div>
                 </div>
-                <div className="mt-4">
-                  <button
-                    onClick={() => viewSkill(skill)}
-                    className="w-full rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-opacity hover:opacity-90"
-                  >
-                    View SKILL.md
-                  </button>
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
 
           {filtered.length === 0 && !error ? (

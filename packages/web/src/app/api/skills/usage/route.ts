@@ -68,8 +68,7 @@ export async function GET() {
                 MAX(invoked_at)::text AS last_used
          FROM skill_usage_events
          GROUP BY skill_name
-         ORDER BY count DESC, skill_name ASC
-         LIMIT 12`
+         ORDER BY count DESC, skill_name ASC`
       ),
       db.query<AgentBreakdown>(
         `SELECT COALESCE(agent_id, 'unknown') AS agent_id,
