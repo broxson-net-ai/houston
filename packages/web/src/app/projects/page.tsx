@@ -12,9 +12,7 @@ export const revalidate = 0;
 export default async function ProjectsPage() {
   const projects = await listProjectsWithCounts();
   const portfolioBoard = getPortfolioExecutionBoard();
-  const progress = portfolioBoard
-    ? await getPortfolioExecutionProgress(portfolioBoard.gates.map((gate) => gate.title))
-    : null;
+  const progress = portfolioBoard ? await getPortfolioExecutionProgress(portfolioBoard) : null;
 
   return (
     <div className="min-h-screen bg-background">

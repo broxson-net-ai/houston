@@ -1,6 +1,7 @@
 import "server-only";
 
 import { db } from "@houston/shared";
+import type { PortfolioExecutionBoard } from "./portfolio-execution";
 
 export type PortfolioTaskBucketProgress = {
   prefix: "NOW" | "NEXT" | "LATER";
@@ -50,6 +51,14 @@ function bucketFromTitle(title: string): "NOW" | "NEXT" | "LATER" | null {
   return null;
 }
 
+function taskCode(title: string) {
+  return title.match(/\b([A-E]-\d+)\b/i)?.[1]?.toUpperCase() ?? null;
+}
+
+function queueKey(title: string) {
+  return taskCode(title) ?? title.trim().toLowerCase();
+}
+
 function applyStatus(target: { total: number; queue: number; inProgress: number; done: number; failed: number; blocked?: number }, status: TaskRow["status"]) {
   target.total += 1;
   if (status === "QUEUE") target.queue += 1;
@@ -59,7 +68,9 @@ function applyStatus(target: { total: number; queue: number; inProgress: number;
   if (status === "FAILED") target.failed += 1;
 }
 
-export async function getPortfolioExecutionProgress(gateTitles: string[]): Promise<PortfolioExecutionProgress> {
+export async function getPortfolioExecutionProgress(
+  board: Pick<PortfolioExecutionBoard, "gates" | "queue">
+): Promise<PortfolioExecutionProgress> {
   const rows = await db.task.findMany({
     where: {
       archivedAt: null,
@@ -87,9 +98,25 @@ export async function getPortfolioExecutionProgress(gateTitles: string[]): Promi
     E: { lane: "E", total: 0, queue: 0, inProgress: 0, done: 0, failed: 0 },
   };
 
+  const allowedKeys = {
+    NOW: new Set(board.queue.now.map((item) => queueKey(item))),
+    NEXT: new Set(board.queue.next.map((item) => queueKey(item))),
+    LATER: new Set(board.queue.later.map((item) => queueKey(item))),
+  };
+  const seenKeys = {
+    NOW: new Set<string>(),
+    NEXT: new Set<string>(),
+    LATER: new Set<string>(),
+  };
+
   for (const row of rows as TaskRow[]) {
     const prefix = bucketFromTitle(row.title);
     if (!prefix) continue;
+
+    const key = queueKey(row.title);
+    if (!allowedKeys[prefix].has(key)) continue;
+    if (seenKeys[prefix].has(key)) continue;
+    seenKeys[prefix].add(key);
 
     applyStatus(buckets[prefix], row.status);
 
@@ -100,7 +127,7 @@ export async function getPortfolioExecutionProgress(gateTitles: string[]): Promi
     }
   }
 
-  const gateProgress: PortfolioGateProgress[] = gateTitles.map((gateTitle) => {
+  const gateProgress: PortfolioGateProgress[] = board.gates.map(({ title: gateTitle }) => {
     const lane = gateTitle.match(/Gate\s+([A-E])/i)?.[1]?.toUpperCase() ?? null;
     if (!lane || !lanes[lane]) {
       return { gateTitle, lane: null, total: 0, done: 0 };

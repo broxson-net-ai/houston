@@ -49,6 +49,7 @@ export type PortfolioSyncReport = {
   reusedProjects: number;
   createdTasks: number;
   updatedTasks: number;
+  eligibleAutoDispatchTasks: number;
   dependencyEdgesCreated: number;
   dependencyEdgesReused: number;
   skippedQueueItems: string[];
@@ -199,6 +200,16 @@ function initialTaskStatus(spec: PortfolioTaskSpec): TaskStatus {
   return spec.dependencies.length > 0 ? TaskStatus.BLOCKED : TaskStatus.QUEUE;
 }
 
+function isAutoDispatchEligible(spec: PortfolioTaskSpec) {
+  return (
+    spec.queuePrefix === "NOW" &&
+    spec.autonomyTier === "draft-only" &&
+    spec.dataClass === "internal" &&
+    spec.approvalTriggers.trim().toLowerCase() === "none" &&
+    spec.rollbackRequired.trim().toLowerCase() === "no"
+  );
+}
+
 function buildInstructions(spec: PortfolioTaskSpec) {
   return [
     `Project: ${spec.projectSlug}`,
@@ -251,6 +262,7 @@ export async function runPortfolioSync(options?: { updatedBy?: string; force?: b
       reusedProjects: 0,
       createdTasks: 0,
       updatedTasks: 0,
+      eligibleAutoDispatchTasks: 0,
       dependencyEdgesCreated: 0,
       dependencyEdgesReused: 0,
       skippedQueueItems: ["sync-paused-by-operator"],
@@ -278,6 +290,7 @@ export async function runPortfolioSync(options?: { updatedBy?: string; force?: b
     reusedProjects: 0,
     createdTasks: 0,
     updatedTasks: 0,
+    eligibleAutoDispatchTasks: 0,
     dependencyEdgesCreated: 0,
     dependencyEdgesReused: 0,
     skippedQueueItems: [],
@@ -321,16 +334,33 @@ export async function runPortfolioSync(options?: { updatedBy?: string; force?: b
       continue;
     }
 
-    const existingTask = await db.task.findFirst({
-      where: { title: spec.title },
-      select: { id: true, status: true },
-    });
+    const autoDispatch = isAutoDispatchEligible(spec);
+    if (autoDispatch) {
+      report.eligibleAutoDispatchTasks += 1;
+    }
+
+    const existingTask =
+      (await db.task.findFirst({
+        where: { title: spec.title },
+        select: { id: true, status: true, title: true },
+      })) ??
+      (await db.task.findFirst({
+        where: {
+          title: {
+            startsWith: `${spec.queuePrefix} ${spec.code} `,
+          },
+        },
+        orderBy: { createdAt: "desc" },
+        select: { id: true, status: true, title: true },
+      }));
 
     if (existingTask) {
       await db.task.update({
         where: { id: existingTask.id },
         data: {
+          title: spec.title,
           projectId: project.id,
+          autoDispatch,
           autonomyTier: spec.autonomyTier,
           dataClass: spec.dataClass,
           instructionsOverride: buildInstructions(spec),
@@ -346,7 +376,7 @@ export async function runPortfolioSync(options?: { updatedBy?: string; force?: b
         title: spec.title,
         projectId: project.id,
         status: initialTaskStatus(spec),
-        autoDispatch: false,
+        autoDispatch,
         autonomyTier: spec.autonomyTier,
         dataClass: spec.dataClass,
         instructionsOverride: buildInstructions(spec),
@@ -381,7 +411,15 @@ export async function runPortfolioSync(options?: { updatedBy?: string; force?: b
       const depTask = depTitle ? taskCache.get(depTitle) : null;
       if (!depTask) continue;
 
-      try {
+      const existingDependency = await db.taskDependency.findFirst({
+        where: {
+          taskId: task.id,
+          dependsOnTaskId: depTask.id,
+        },
+        select: { id: true },
+      });
+
+      if (!existingDependency) {
         await db.taskDependency.create({
           data: {
             taskId: task.id,
@@ -389,7 +427,7 @@ export async function runPortfolioSync(options?: { updatedBy?: string; force?: b
           },
         });
         report.dependencyEdgesCreated += 1;
-      } catch {
+      } else {
         report.dependencyEdgesReused += 1;
       }
     }

@@ -13,6 +13,7 @@ type SyncState = {
     createdTasks?: number;
     updatedTasks?: number;
     createdProjects?: number;
+    eligibleAutoDispatchTasks?: number;
     skippedQueueItems?: string[];
   } | null;
 };
@@ -101,6 +102,11 @@ export default function PortfolioProcessingControls() {
       {state?.report ? (
         <div>
           Projects +{state.report.createdProjects ?? 0} · Tasks +{state.report.createdTasks ?? 0} · Updated {state.report.updatedTasks ?? 0}
+        </div>
+      ) : null}
+      {state?.report ? (
+        <div>
+          Eligible for auto-run: {state.report.eligibleAutoDispatchTasks ?? 0}
         </div>
       ) : null}
       {message ? <div className="text-foreground">{message}</div> : null}
