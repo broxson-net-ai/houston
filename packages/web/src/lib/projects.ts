@@ -6,19 +6,10 @@ import os from "os";
 import path from "path";
 import matter from "gray-matter";
 import { db } from "@houston/shared";
-import type { Project as PrismaProject } from "@houston/shared";
 
 export const PROJECT_STATUS_VALUES = ["active", "blocked", "paused", "done", "draft", "archived"] as const;
 
 export type ProjectStatus = (typeof PROJECT_STATUS_VALUES)[number];
-
-export type ProjectModel = Pick<
-  PrismaProject,
-  "id" | "slug" | "title" | "createdAt" | "updatedAt"
-> & {
-  status: ProjectStatus;
-  metadata: Record<string, unknown> | null;
-};
 
 export type ProjectLinks = {
   project?: string;
@@ -314,7 +305,7 @@ export async function listProjectsWithCounts(
   const projects = listProjects();
   if (projects.length === 0) return projects;
 
-  const [schedules, tasks] = await Promise.all([
+  const [schedules, tasks, dbProjects] = await Promise.all([
     db.schedule.findMany({
       select: {
         id: true,
@@ -328,10 +319,16 @@ export async function listProjectsWithCounts(
         id: true,
         archivedAt: true,
         status: true,
+        projectId: true,
         template: { select: { tags: true } },
       },
     }),
+    db.project.findMany({
+      select: { id: true, slug: true },
+    }),
   ]);
+
+  const dbProjectSlugById = new Map(dbProjects.map((p) => [p.id, p.slug]));
 
   const scheduleCounts = new Map<string, number>();
   const taskCounts = new Map<string, number>();
@@ -359,7 +356,9 @@ export async function listProjectsWithCounts(
 
   tasks.forEach((task) => {
     const tags = normalizeTags(task.template?.tags);
-    const slug = projects.find((p) => tags.includes(tagForProject(p.slug)))?.slug;
+    const slug =
+      projects.find((p) => tags.includes(tagForProject(p.slug)))?.slug ??
+      (task.projectId ? dbProjectSlugById.get(task.projectId) : undefined);
     if (!slug) return;
     taskCounts.set(slug, (taskCounts.get(slug) ?? 0) + 1);
     if (!task.archivedAt && (task.status === "QUEUE" || task.status === "BLOCKED" || task.status === "IN_PROGRESS")) {
@@ -600,7 +599,7 @@ function assertValidSlug(slug: string) {
   return /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug);
 }
 
-export function createProject(input: CreateProjectInput) {
+export async function createProject(input: CreateProjectInput) {
   if (!assertValidSlug(input.slug)) {
     return { error: "Invalid slug", status: 400 as const };
   }
@@ -628,6 +627,14 @@ export function createProject(input: CreateProjectInput) {
   fs.writeFileSync(path.join(projectDir, "SECRETS.md"), secretsTemplate(input.name), "utf8");
 
   upsertRegistryEntry(input.slug, input.name, status);
+
+  // Ensure a DB record exists so tasks can reference this project via projectId.
+  await db.project.upsert({
+    where: { slug: input.slug },
+    create: { slug: input.slug, title: input.name, metadata: { source: "web-api" } },
+    update: { title: input.name },
+  });
+
   const project = getProject(input.slug);
   if (!project) {
     return { error: "Project created but could not be reloaded", status: 500 as const };

@@ -58,7 +58,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const result = createProject({
+    const result = await createProject({
       slug,
       name: resolvedName,
       status,

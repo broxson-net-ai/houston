@@ -2,7 +2,6 @@ import { getToken } from "next-auth/jwt";
 import { NextRequest, NextResponse } from "next/server";
 
 export async function middleware(req: NextRequest) {
-  const token = await getToken({ req, secret: process.env.NEXTAUTH_SECRET });
   const { pathname } = new URL(req.url);
 
   // Allow public routes
@@ -11,7 +10,15 @@ export async function middleware(req: NextRequest) {
     return NextResponse.next();
   }
 
-  // Redirect to login if no token
+  // Allow requests with a valid static API key (for internal service-to-service calls)
+  const apiKey = process.env.HOUSTON_API_KEY;
+  const authHeader = req.headers.get("authorization");
+  if (apiKey && authHeader === `Bearer ${apiKey}`) {
+    return NextResponse.next();
+  }
+
+  // Fall back to NextAuth JWT session (for web UI)
+  const token = await getToken({ req, secret: process.env.NEXTAUTH_SECRET });
   if (!token) {
     const loginUrl = new URL("/login", req.url);
     return NextResponse.redirect(loginUrl);

@@ -2,7 +2,7 @@ import fs from "fs";
 import os from "os";
 import path from "path";
 
-import { ProjectStatus, TaskEventType, TaskStatus } from "@prisma/client";
+import { TaskEventType, TaskStatus } from "@prisma/client";
 import { db } from "./db.js";
 
 const DEFAULT_PROJECTS_DIR = path.join(
@@ -188,14 +188,6 @@ function humanizeSlug(slug: string) {
     .join(" ");
 }
 
-function normalizeProjectStatus(input?: string): ProjectStatus {
-  const value = String(input || "").trim().toLowerCase();
-  if (value.includes("active")) return ProjectStatus.ACTIVE;
-  if (value.includes("done") || value.includes("complete")) return ProjectStatus.DONE;
-  if (value.includes("paused") || value.includes("blocked")) return ProjectStatus.PAUSED;
-  return ProjectStatus.DRAFT;
-}
-
 function initialTaskStatus(spec: PortfolioTaskSpec): TaskStatus {
   return spec.dependencies.length > 0 ? TaskStatus.BLOCKED : TaskStatus.QUEUE;
 }
@@ -310,11 +302,11 @@ export async function runPortfolioSync(options?: { updatedBy?: string; force?: b
       continue;
     }
 
+    const title = humanizeSlug(spec.projectSlug);
     const createdProject = await db.project.create({
       data: {
         slug: spec.projectSlug,
-        title: humanizeSlug(spec.projectSlug),
-        status: normalizeProjectStatus("active"),
+        title,
         metadata: {
           source: "portfolio-sync",
           updatedBy: options?.updatedBy ?? "portfolio-sync",
@@ -322,6 +314,29 @@ export async function runPortfolioSync(options?: { updatedBy?: string; force?: b
       },
       select: { id: true, slug: true },
     });
+
+    // Bootstrap a minimal filesystem project directory so the web UI can see it.
+    const projectDir = path.join(PROJECTS_DIR, spec.projectSlug);
+    if (!fs.existsSync(projectDir)) {
+      fs.mkdirSync(projectDir, { recursive: true });
+      const today = new Date().toISOString().slice(0, 10);
+      const doc = [
+        "---",
+        `title: ${title}`,
+        `slug: ${spec.projectSlug}`,
+        "status: active",
+        `lastUpdated: ${today}`,
+        "---",
+        `# ${title}`,
+        "",
+        "## Overview",
+        "",
+        "Created by portfolio-sync.",
+        "",
+      ].join("\n");
+      fs.writeFileSync(path.join(projectDir, "PROJECT.md"), doc, "utf8");
+    }
+
     projectCache.set(spec.projectSlug, createdProject);
     report.createdProjects += 1;
   }

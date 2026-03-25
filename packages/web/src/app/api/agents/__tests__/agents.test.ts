@@ -90,7 +90,7 @@ describe("PATCH /api/agents/:id", () => {
       body: JSON.stringify({ name: "New Name" }),
     });
 
-    const res = await PATCH(req, { params: { id: "agent-1" } });
+    const res = await PATCH(req, { params: Promise.resolve({ id: "agent-1" }) });
     expect(res.status).toBe(200);
     const data = await res.json();
     expect(data.name).toBe("New Name");
@@ -106,7 +106,7 @@ describe("DELETE /api/agents/:id", () => {
       method: "DELETE",
     });
 
-    const res = await DELETE(req, { params: { id: "agent-1" } });
+    const res = await DELETE(req, { params: Promise.resolve({ id: "agent-1" }) });
     expect(res.status).toBe(200);
   });
 
@@ -117,7 +117,7 @@ describe("DELETE /api/agents/:id", () => {
       method: "DELETE",
     });
 
-    const res = await DELETE(req, { params: { id: "nonexistent" } });
+    const res = await DELETE(req, { params: Promise.resolve({ id: "nonexistent" }) });
     expect(res.status).toBe(404);
   });
 });
