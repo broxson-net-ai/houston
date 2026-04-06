@@ -1,0 +1,2 @@
+ALTER TABLE cp_work_items
+ADD COLUMN IF NOT EXISTS "autonomousEligible" BOOLEAN NOT NULL DEFAULT FALSE;

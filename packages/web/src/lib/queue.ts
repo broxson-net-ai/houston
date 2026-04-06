@@ -26,3 +26,8 @@ export async function enqueueTaskDispatch(taskId: string, reason = "manual-dispa
   const boss = await getBoss();
   await boss.send("dispatch-task", { taskId, reason });
 }
+
+export async function enqueueControlPlaneExport(snapshotId: string) {
+  const boss = await getBoss();
+  await boss.send("control-plane-export", { snapshotId });
+}

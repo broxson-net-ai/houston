@@ -4,6 +4,7 @@ type ShutdownDeps = {
   approvalResumeTimer: ReturnType<typeof setInterval> | null;
   trustVerifyTimer: ReturnType<typeof setInterval> | null;
   approvalAuditHealthTimer?: ReturnType<typeof setInterval> | null;
+  runTimeoutWatchdogTimer?: ReturnType<typeof setInterval> | null;
   gatewayClient?: { disconnect: () => void };
 };
 
@@ -40,6 +41,11 @@ export function createShutdownHandler(
     if (deps.approvalAuditHealthTimer) {
       clearInterval(deps.approvalAuditHealthTimer);
       console.log("[worker] Approval audit health timer stopped");
+    }
+
+    if (deps.runTimeoutWatchdogTimer) {
+      clearInterval(deps.runTimeoutWatchdogTimer);
+      console.log("[worker] Run timeout watchdog timer stopped");
     }
 
     if (deps.gatewayClient) {

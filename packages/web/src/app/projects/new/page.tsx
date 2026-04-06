@@ -1,19 +1,15 @@
 "use client";
 
 import { useState } from "react";
-import { useRouter } from "next/navigation";
 import { Nav } from "@/components/nav";
 
 export default function NewProjectPage() {
-  const router = useRouter();
   const [form, setForm] = useState({
-    name: "",
-    slug: "",
     title: "",
     status: "draft",
     owner: "",
     summary: "",
-    tags: "",
+    idea: "",
   });
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
@@ -27,7 +23,7 @@ export default function NewProjectPage() {
   }
 
   function handleNameChange(value: string) {
-    setForm((prev) => ({ ...prev, name: value, slug: slugify(value), title: value }));
+    setForm((prev) => ({ ...prev, title: value }));
   }
 
   async function handleSubmit(e: React.FormEvent) {
@@ -36,19 +32,19 @@ export default function NewProjectPage() {
     setLoading(true);
 
     const body = {
-      name: form.name,
-      slug: form.slug,
       title: form.title,
+      slug: slugify(form.title),
       status: form.status,
       owner: form.owner || undefined,
       summary: form.summary || undefined,
-      tags: form.tags ? form.tags.split(",").map((tag) => tag.trim()).filter(Boolean) : undefined,
+      idea: form.idea || undefined,
     };
 
     try {
-      const res = await fetch("/api/projects", {
+      const res = await fetch("/api/v1/projects", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        credentials: "include",
         body: JSON.stringify(body),
       });
 
@@ -60,7 +56,8 @@ export default function NewProjectPage() {
         return;
       }
 
-      window.location.href = "/projects";
+      const data = await res.json();
+      window.location.href = data?.data?.slug ? `/projects/${data.data.slug}` : "/projects";
     } catch (err) {
       setLoading(false);
       setError("Failed to create project");
@@ -76,30 +73,31 @@ export default function NewProjectPage() {
             ← Back to Projects
           </a>
         </div>
-        <h1 className="text-2xl font-bold mb-6">New Project</h1>
+        <h1 className="text-2xl font-bold mb-2">Create Draft Project</h1>
+        <p className="mb-6 text-sm text-muted-foreground">Capture an idea with minimum scaffolding and refine it inside the project control plane.</p>
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
             <label htmlFor="name" className="block text-sm font-medium mb-1">
-              Project Name *
+              Project Title *
             </label>
             <input
               id="name"
               className="w-full px-3 py-2 border rounded-md text-sm bg-background"
-              value={form.name}
+              value={form.title}
               onChange={(e) => handleNameChange(e.target.value)}
               required
             />
           </div>
           <div>
             <label htmlFor="slug" className="block text-sm font-medium mb-1">
-              Slug (URL identifier)
+              Slug preview
             </label>
             <input
               id="slug"
               className="w-full px-3 py-2 border rounded-md text-sm bg-muted"
-              value={form.slug}
-              onChange={(e) => setForm({ ...form, slug: e.target.value })}
-              placeholder="auto-generated from name"
+              value={slugify(form.title)}
+              readOnly
+              placeholder="auto-generated from title"
             />
           </div>
           <div>
@@ -113,12 +111,11 @@ export default function NewProjectPage() {
               onChange={(e) => setForm({ ...form, status: e.target.value })}
             >
               <option value="draft">Draft</option>
-              <option value="active">Active</option>
-              <option value="blocked">Blocked</option>
-              <option value="paused">Paused</option>
-              <option value="done">Done</option>
-            </select>
-          </div>
+                <option value="active">Active</option>
+                <option value="paused">Paused</option>
+                <option value="archived">Archived</option>
+              </select>
+            </div>
           <div>
             <label htmlFor="owner" className="block text-sm font-medium mb-1">
               Owner
@@ -145,15 +142,16 @@ export default function NewProjectPage() {
             />
           </div>
           <div>
-            <label htmlFor="tags" className="block text-sm font-medium mb-1">
-              Tags (comma-separated)
+            <label htmlFor="idea" className="block text-sm font-medium mb-1">
+              Initial Idea
             </label>
-            <input
-              id="tags"
+            <textarea
+              id="idea"
               className="w-full px-3 py-2 border rounded-md text-sm bg-background"
-              value={form.tags}
-              onChange={(e) => setForm({ ...form, tags: e.target.value })}
-              placeholder="e.g., infrastructure, automation, ops"
+              rows={6}
+              value={form.idea}
+              onChange={(e) => setForm({ ...form, idea: e.target.value })}
+              placeholder='Example: "Eliza, create a draft project for taking over the world." Capture the idea, constraints, and first thoughts here.'
             />
           </div>
           {error && <p className="text-sm text-destructive">{error}</p>}

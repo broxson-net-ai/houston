@@ -7,34 +7,6 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-enum TaskStatus {
-  QUEUE
-  BLOCKED
-  IN_PROGRESS
-  DONE
-  FAILED
-}
-
-enum TaskRunStatus {
-  ACCEPTED
-  RUNNING
-  COMPLETED
-  FAILED
-}
-
-enum TaskEventType {
-  CREATED
-  SCHEDULED
-  QUEUED
-  DISPATCHED
-  STARTED
-  COMPLETED
-  FAILED
-  MISSED
-  STATUS_CHANGED
-  ARCHIVED
-}
-
 model User {
   id           String   @id @default(cuid())
   email        String   @unique
@@ -53,165 +25,8 @@ model Agent {
   tags       Json      @default("[]")
   createdAt  DateTime  @default(now())
   updatedAt  DateTime  @updatedAt
-  templates  Template[]
-  tasks      Task[]
 
   @@map("agents")
-}
-
-model PreInstructionsVersion {
-  id        String   @id @default(cuid())
-  version   Int
-  content   String
-  isActive  Boolean  @default(false)
-  createdAt DateTime @default(now())
-
-  @@map("pre_instructions_versions")
-}
-
-model Template {
-  id             String     @id @default(cuid())
-  name           String
-  defaultAgentId String?
-  defaultAgent   Agent?     @relation(fields: [defaultAgentId], references: [id])
-  skillRef       String?
-  instructions   String
-  tags           Json       @default("[]")
-  priority       Int        @default(0)
-  enabled        Boolean    @default(true)
-  createdAt      DateTime   @default(now())
-  updatedAt      DateTime   @updatedAt
-  schedules      Schedule[]
-  tasks          Task[]
-
-  @@map("templates")
-}
-
-model Schedule {
-  id            String    @id @default(cuid())
-  templateId    String
-  template      Template  @relation(fields: [templateId], references: [id])
-  cron          String
-  timezone      String    @default("America/Los_Angeles")
-  enabled       Boolean   @default(true)
-  nextRunAt     DateTime?
-  lastRunAt     DateTime?
-  missedCount   Int       @default(0)
-  lastMissedAt  DateTime?
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
-  tasks         Task[]
-  taskEvents    TaskEvent[]
-
-  @@map("schedules")
-}
-
-model Project {
-  id          String   @id @default(cuid())
-  slug        String   @unique
-  title       String
-  metadata    Json?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-
-  tasks       Task[]
-
-  @@map("projects")
-}
-
-model Task {
-  id                           String      @id @default(cuid())
-  title                        String
-  templateId                   String?
-  template                     Template?   @relation(fields: [templateId], references: [id])
-  scheduleId                   String?
-  schedule                     Schedule?   @relation(fields: [scheduleId], references: [id])
-  agentId                      String?
-  agent                        Agent?      @relation(fields: [agentId], references: [id])
-  dueAt                        DateTime?
-  status                       TaskStatus  @default(QUEUE)
-  autoDispatch                 Boolean     @default(false)
-  autonomyTier                 String?
-  dataClass                    String?
-  projectId                    String?
-  project                      Project?     @relation(fields: [projectId], references: [id])
-  instructionsOverride         String?
-  assembledInstructionsSnapshot String?
-  preInstructionsVersion       String?
-  archivedAt                   DateTime?
-  createdAt                    DateTime    @default(now())
-  updatedAt                    DateTime    @updatedAt
-  taskRuns                     TaskRun[]
-  taskEvents                   TaskEvent[]
-  dependencies                 TaskDependency[] @relation("TaskDependencies")
-  dependedBy                   TaskDependency[] @relation("TaskDependents")
-
-  @@map("tasks")
-}
-
-model TaskDependency {
-  id              String   @id @default(cuid())
-  taskId          String
-  dependsOnTaskId String
-  createdAt       DateTime @default(now())
-
-  task            Task     @relation("TaskDependencies", fields: [taskId], references: [id], onDelete: Cascade)
-  dependsOnTask   Task     @relation("TaskDependents", fields: [dependsOnTaskId], references: [id], onDelete: Cascade)
-
-  @@unique([taskId, dependsOnTaskId])
-  @@index([taskId])
-  @@index([dependsOnTaskId])
-  @@map("task_dependencies")
-}
-
-model TaskRun {
-  id              String        @id @default(cuid())
-  taskId          String
-  task            Task          @relation(fields: [taskId], references: [id])
-  attemptNumber   Int           @default(1)
-  dispatchedAt    DateTime?
-  startedAt       DateTime?
-  finishedAt      DateTime?
-  status          TaskRunStatus @default(ACCEPTED)
-  wsRequestId     String?
-  gatewayRunId    String?
-  requestPayload  Json?
-  responsePayload Json?
-  errorText       String?
-  idempotencyKey  String?       @unique
-  createdAt       DateTime      @default(now())
-  updatedAt       DateTime      @updatedAt
-  taskLogs        TaskLog[]
-  taskEvents      TaskEvent[]
-
-  @@map("task_runs")
-}
-
-model TaskLog {
-  id        String   @id @default(cuid())
-  taskRunId String
-  taskRun   TaskRun  @relation(fields: [taskRunId], references: [id])
-  logText   String
-  truncated Boolean  @default(false)
-  createdAt DateTime @default(now())
-
-  @@map("task_logs")
-}
-
-model TaskEvent {
-  id         String        @id @default(cuid())
-  taskId     String?
-  task       Task?         @relation(fields: [taskId], references: [id])
-  scheduleId String?
-  schedule   Schedule?     @relation(fields: [scheduleId], references: [id])
-  taskRunId  String?
-  taskRun    TaskRun?      @relation(fields: [taskRunId], references: [id])
-  type       TaskEventType
-  message    String?
-  metadata   Json?
-  createdAt  DateTime      @default(now())
-
-  @@map("task_events")
 }
 
 model SkillsCache {
@@ -236,91 +51,597 @@ model SystemStatus {
   @@map("system_status")
 }
 
-enum ApprovalSeverity {
+
+enum CpProjectStatus {
+  DRAFT
+  ACTIVE
+  PAUSED
+  ARCHIVED
+}
+
+enum CpDocKind {
+  PROJECT
+  ACTION_PLAN
+  NOTES
+  ARCHITECTURE
+  DECISIONS
+  STATUS
+  RUNBOOK
+}
+
+enum CpDocMode {
+  MANAGED
+  FROZEN
+  EXTERNAL_IMPORT
+}
+
+enum CpTrustMode {
+  STRICT
+  BALANCED
+  TRUSTED
+}
+
+enum CpPhaseStatus {
+  PLANNING
+  READY
+  ACTIVE
+  BLOCKED
+  DONE
+  ARCHIVED
+}
+
+enum CpWorkItemType {
+  PLANNING
+  EXECUTION
+  AUDIT
+  REVIEW
+  APPROVAL
+}
+
+enum CpWorkItemStatus {
+  PLANNING
+  READY
+  BLOCKED
+  IN_PROGRESS
+  DONE
+  ARCHIVED
+}
+
+enum CpAutonomyLevel {
+  MANUAL
+  DRAFT_ONLY
+  APPROVAL_GATED
+  TRUSTED_AUTO
+}
+
+enum CpRiskLevel {
   LOW
   MEDIUM
   HIGH
-  CRITICAL
 }
 
-enum ApprovalDecision {
+enum CpDependencySubjectType {
+  PROJECT
+  PHASE
+  WORK_ITEM
+  APPROVAL_GATE
+  EXTERNAL_GATE
+}
+
+enum CpDependencyEdgeType {
+  BLOCKS
+  RELATES_TO
+  PARENT_OF
+  REQUIRES_APPROVAL
+  DEPENDS_ON_EXTERNAL
+  PHASE_GATE
+}
+
+enum CpDependencyScope {
+  INTRA_PROJECT
+  CROSS_PROJECT
+  PHASE_GATE
+  OPERATIONAL_GATE
+}
+
+enum CpDependencyStrength {
+  HARD
+  SOFT
+}
+
+enum CpApprovalDomain {
+  WORKFLOW
+  ACTION
+}
+
+enum CpApprovalDecisionRule {
+  ALLOW
+  DENY
+  APPROVAL_REQUIRED
+  AUTO_RESOLVE_IF_POLICY_MATCH
+}
+
+enum CpApprovalRequestStatus {
   PENDING
   APPROVED
   DENIED
   REVISED
+  EXPIRED
+  AUTO_RESOLVED
 }
 
-enum ApprovalDecisionPath {
-  MANUAL
-  POLICY_AUTO
+enum CpApprovalBindingType {
+  UNBLOCKS
+  ALLOWS_ACTION
+  PHASE_EXIT
+  OVERRIDE
+}
+
+enum CpExecutionRunStatus {
+  ACCEPTED
+  RUNNING
+  WAITING_APPROVAL
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+enum CpAuditStatus {
+  PENDING
+  RUNNING
+  COMPLETED
+  NEEDS_REVIEW
+  ACCEPTED
+}
+
+enum CpAuditSourceType {
+  LEGACY_MARKDOWN
+  MANUAL_REVIEW
+  HYBRID
+}
+
+enum CpFindingResult {
+  VERIFIED_TRUE
+  VERIFIED_FALSE
+  UNCLEAR
+  NEEDS_HUMAN_REVIEW
+}
+
+enum CpExportTriggerType {
+  MANUAL_UI
+  MANUAL_API
+  SCHEDULED
+  PRE_CHANGE_CHECKPOINT
+}
+
+enum CpExportStatus {
+  QUEUED
+  RUNNING
+  COMPLETED
+  FAILED
+}
+
+enum CpEventStreamType {
+  PROJECT
+  PHASE
+  WORK_ITEM
+  DEPENDENCY
+  APPROVAL
+  EXECUTION
+  AUDIT
+  EXPORT
   SYSTEM
 }
 
-enum ApprovalAuditDecision {
-  REQUESTED
-  APPROVED
-  DENIED
-  REVISED
-  EXPIRED
-  CANCELLED
-  EXECUTED
+model CpProject {
+  id               String             @id @default(cuid())
+  slug             String             @unique
+  title            String
+  status           CpProjectStatus    @default(DRAFT)
+  owner            String?
+  defaultTrustMode CpTrustMode        @default(STRICT)
+  docMode          CpDocMode          @default(MANAGED)
+  summary          String?
+  metadata         Json?
+  archivedAt       DateTime?
+  createdAt        DateTime           @default(now())
+  updatedAt        DateTime           @updatedAt
+
+  settings         CpProjectSetting?
+  docs             CpProjectDoc[]
+  phases           CpProjectPhase[]
+  workItems        CpWorkItem[]
+  approvalPolicies CpApprovalPolicy[]
+  executionRuns    CpExecutionRun[]
+  realityAudits    CpRealityAudit[]
+  importBatches    CpImportBatch[]
+  exportSnapshots  CpExportSnapshot[]
+
+  @@index([status, archivedAt])
+  @@map("cp_projects")
 }
 
-model ApprovalAuditEvent {
-  id           String              @id @default(cuid())
-  eventId      String              @unique
-  eventVersion Int                 @default(1)
+model CpProjectSetting {
+  projectId                  String            @id
+  trustModeOverride          CpTrustMode?
+  planningRequiredByDefault  Boolean           @default(false)
+  autoExportEnabled          Boolean           @default(false)
+  defaultAutonomyLevel       CpAutonomyLevel?
+  settingsJson               Json?
+  createdAt                  DateTime          @default(now())
+  updatedAt                  DateTime          @updatedAt
 
-  requestId    String
-  taskRunId    String?
-  taskId       String?
-  projectId    String?
-  lane         String?
+  project                    CpProject         @relation(fields: [projectId], references: [id], onDelete: Cascade)
 
-  role         String
-  trigger      String
-  severity     ApprovalSeverity
-  decision     ApprovalAuditDecision
-  decisionPath ApprovalDecisionPath
-  deciderType  String
-  deciderId    String?
-
-  autonomyTier String?
-  dataClass    String?
-  summary      String
-  evidenceRefs Json?
-
-  createdAt    DateTime            @default(now())
-  decidedAt    DateTime?
-  latencyMs    Int?
-  meta         Json?
-
-  @@index([requestId])
-  @@index([trigger])
-  @@index([decision])
-  @@index([createdAt])
-  @@map("approval_audit_events")
+  @@map("cp_project_settings")
 }
 
-model ApprovalRequest {
-  id           String           @id @default(cuid())
-  requestId    String           @unique
-  role         String
-  trigger      String
-  severity     ApprovalSeverity @default(MEDIUM)
-  intent       String
-  target       String
-  risk         String
-  rollback     String
-  budget       Json?
-  context      Json?
-  decision     ApprovalDecision @default(PENDING)
-  decider      String?
-  reason       String?
-  outcome      String?
-  createdAt    DateTime         @default(now())
-  decidedAt    DateTime?
-  taskRunId    String?
+model CpProjectDoc {
+  id            String             @id @default(cuid())
+  projectId     String
+  kind          CpDocKind
+  title         String
+  contentMarkdown String
+  version       Int                @default(1)
+  isActive      Boolean            @default(true)
+  lastEditedBy  String?
+  archivedAt    DateTime?
+  createdAt     DateTime           @default(now())
+  updatedAt     DateTime           @updatedAt
 
-  @@map("approval_requests")
+  project       CpProject          @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  versions      CpProjectDocVersion[]
+
+  @@index([projectId, kind])
+  @@map("cp_project_docs")
+}
+
+model CpProjectDocVersion {
+  id             String      @id @default(cuid())
+  projectDocId   String
+  version        Int
+  title          String
+  contentMarkdown String
+  editedBy       String?
+  editReason     String?
+  createdAt      DateTime    @default(now())
+
+  projectDoc     CpProjectDoc @relation(fields: [projectDocId], references: [id], onDelete: Cascade)
+
+  @@index([projectDocId, version])
+  @@unique([projectDocId, version])
+  @@map("cp_project_doc_versions")
+}
+
+model CpProjectPhase {
+  id                    String          @id @default(cuid())
+  projectId             String
+  phaseKey              String
+  title                 String
+  ordinal               Int
+  status                CpPhaseStatus   @default(PLANNING)
+  planningRequired      Boolean         @default(false)
+  entryCriteriaMarkdown String?
+  exitCriteriaMarkdown  String?
+  summaryMarkdown       String?
+  startedAt             DateTime?
+  completedAt           DateTime?
+  archivedAt            DateTime?
+  createdAt             DateTime        @default(now())
+  updatedAt             DateTime        @updatedAt
+
+  project               CpProject       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  workItems             CpWorkItem[]
+  approvalPolicies      CpApprovalPolicy[]
+  executionRuns         CpExecutionRun[]
+
+  @@unique([projectId, phaseKey])
+  @@unique([projectId, ordinal])
+  @@index([projectId, status, archivedAt])
+  @@map("cp_project_phases")
+}
+
+model CpWorkItem {
+  id                         String            @id @default(cuid())
+  projectId                  String
+  phaseId                    String?
+  type                       CpWorkItemType
+  title                      String
+  descriptionMarkdown        String?
+  status                     CpWorkItemStatus  @default(PLANNING)
+  autonomyLevel              CpAutonomyLevel   @default(MANUAL)
+  riskLevel                  CpRiskLevel       @default(MEDIUM)
+  dataClass                  String?
+  trustModeOverride          CpTrustMode?
+  priority                   Int?
+  sourceKind                 String?
+  generatedFromAuditFindingId String?
+  generatedFromPlanWorkItemId String?
+  assignedAgentKey           String?
+  autonomousEligible         Boolean           @default(false)
+  readyComputedAt            DateTime?
+  blockedReasonCache         Json?
+  recommendedCapabilities    Json?
+  recommendedSkills          Json?
+  recommendedTools           Json?
+  archivedAt                 DateTime?
+  createdAt                  DateTime          @default(now())
+  updatedAt                  DateTime          @updatedAt
+
+  project                    CpProject         @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  phase                      CpProjectPhase?   @relation(fields: [phaseId], references: [id], onDelete: SetNull)
+  generatedFromAuditFinding  CpRealityFinding? @relation(fields: [generatedFromAuditFindingId], references: [id], onDelete: SetNull)
+  generatedFromPlanWorkItem  CpWorkItem?       @relation("CpGeneratedWorkItems", fields: [generatedFromPlanWorkItemId], references: [id], onDelete: SetNull)
+  generatedWorkItems         CpWorkItem[]      @relation("CpGeneratedWorkItems")
+  labels                     CpWorkItemLabel[]
+  executionRuns              CpExecutionRun[]
+
+  @@index([projectId, phaseId, status, archivedAt])
+  @@index([projectId, type, status])
+  @@map("cp_work_items")
+}
+
+model CpWorkItemLabel {
+  id          String      @id @default(cuid())
+  workItemId  String
+  label       String
+  createdAt   DateTime    @default(now())
+
+  workItem    CpWorkItem  @relation(fields: [workItemId], references: [id], onDelete: Cascade)
+
+  @@unique([workItemId, label])
+  @@map("cp_work_item_labels")
+}
+
+model CpDependencyEdge {
+  id              String                    @id @default(cuid())
+  fromSubjectType CpDependencySubjectType
+  fromSubjectId   String
+  toSubjectType   CpDependencySubjectType
+  toSubjectId     String
+  edgeType        CpDependencyEdgeType
+  scope           CpDependencyScope
+  strength        CpDependencyStrength      @default(HARD)
+  reason          String?
+  createdBy       String?
+  archivedAt      DateTime?
+  createdAt       DateTime                  @default(now())
+  updatedAt       DateTime                  @updatedAt
+
+  @@index([fromSubjectType, fromSubjectId, archivedAt])
+  @@index([toSubjectType, toSubjectId, archivedAt])
+  @@map("cp_dependency_edges")
+}
+
+model CpApprovalPolicy {
+  id             String                 @id @default(cuid())
+  domain         CpApprovalDomain
+  subjectType    String?
+  projectId      String?
+  phaseId        String?
+  workItemType   CpWorkItemType?
+  autonomyLevel  CpAutonomyLevel?
+  riskLevel      CpRiskLevel?
+  dataClass      String?
+  capabilityKey  String?
+  decisionRule   CpApprovalDecisionRule
+  requiresRole   String?
+  priority       Int                    @default(100)
+  isActive       Boolean                @default(true)
+  ruleJson       Json?
+  createdAt      DateTime               @default(now())
+  updatedAt      DateTime               @updatedAt
+
+  project        CpProject?             @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  phase          CpProjectPhase?        @relation(fields: [phaseId], references: [id], onDelete: SetNull)
+
+  @@index([domain, isActive, priority])
+  @@index([projectId, phaseId, isActive])
+  @@map("cp_approval_policies")
+}
+
+model CpApprovalRequest {
+  id               String                  @id @default(cuid())
+  domain           CpApprovalDomain
+  subjectType      String
+  subjectId        String
+  trigger          String
+  reason           String
+  status           CpApprovalRequestStatus @default(PENDING)
+  requiredRole     String?
+  requestedByRunId String?
+  requestedByActor String?
+  expiresAt        DateTime?
+  requestedAt      DateTime                @default(now())
+  resolvedAt       DateTime?
+  metadata         Json?
+
+  requestedByRun   CpExecutionRun?         @relation(fields: [requestedByRunId], references: [id], onDelete: SetNull)
+  decisions        CpApprovalDecisionRecord[]
+  bindings         CpApprovalBinding[]
+
+  @@index([status, requestedAt])
+  @@index([subjectType, subjectId, status])
+  @@map("cp_approval_requests")
+}
+
+model CpApprovalDecisionRecord {
+  id                String             @id @default(cuid())
+  approvalRequestId String
+  decision          CpApprovalRequestStatus
+  decisionMode      String
+  decidedBy         String?
+  reason            String?
+  metadata          Json?
+  createdAt         DateTime           @default(now())
+
+  approvalRequest   CpApprovalRequest  @relation(fields: [approvalRequestId], references: [id], onDelete: Cascade)
+
+  @@index([approvalRequestId, createdAt])
+  @@map("cp_approval_decisions")
+}
+
+model CpApprovalBinding {
+  id                String                 @id @default(cuid())
+  approvalRequestId String
+  subjectType       String
+  subjectId         String
+  bindingType       CpApprovalBindingType
+  createdAt         DateTime               @default(now())
+
+  approvalRequest   CpApprovalRequest      @relation(fields: [approvalRequestId], references: [id], onDelete: Cascade)
+
+  @@index([subjectType, subjectId])
+  @@map("cp_approval_bindings")
+}
+
+model CpExecutionRun {
+  id                           String               @id @default(cuid())
+  workItemId                   String
+  projectId                    String
+  phaseId                      String?
+  status                       CpExecutionRunStatus @default(ACCEPTED)
+  attemptNumber                Int                  @default(1)
+  assembledInstructionsSnapshot String
+  gatewayRunId                 String?              @unique
+  idempotencyKey               String?              @unique
+  errorText                    String?
+  responsePayload              Json?
+  startedAt                    DateTime?
+  finishedAt                   DateTime?
+  createdAt                    DateTime             @default(now())
+  updatedAt                    DateTime             @updatedAt
+
+  workItem                     CpWorkItem           @relation(fields: [workItemId], references: [id], onDelete: Cascade)
+  project                      CpProject            @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  phase                        CpProjectPhase?      @relation(fields: [phaseId], references: [id], onDelete: SetNull)
+  approvalEnvelope             CpRunApprovalEnvelope?
+  events                       CpRunEvent[]
+  approvalRequests             CpApprovalRequest[]
+
+  @@index([workItemId, createdAt])
+  @@index([projectId, status])
+  @@map("cp_execution_runs")
+}
+
+model CpRunApprovalEnvelope {
+  id                  String          @id @default(cuid())
+  executionRunId      String          @unique
+  trustMode           CpTrustMode
+  capabilityPolicyJson Json
+  effectivePolicyHash String
+  createdAt           DateTime        @default(now())
+
+  executionRun        CpExecutionRun  @relation(fields: [executionRunId], references: [id], onDelete: Cascade)
+
+  @@map("cp_run_approval_envelopes")
+}
+
+model CpRunEvent {
+  id             String          @id @default(cuid())
+  executionRunId String
+  eventType      String
+  message        String?
+  payload        Json?
+  occurredAt     DateTime        @default(now())
+
+  executionRun   CpExecutionRun  @relation(fields: [executionRunId], references: [id], onDelete: Cascade)
+
+  @@index([executionRunId, occurredAt])
+  @@map("cp_run_events")
+}
+
+model CpRealityAudit {
+  id             String             @id @default(cuid())
+  projectId      String
+  status         CpAuditStatus      @default(PENDING)
+  sourceType     CpAuditSourceType
+  confidenceMode CpTrustMode
+  summary        String?
+  startedAt      DateTime?
+  finishedAt     DateTime?
+  acceptedAt     DateTime?
+  acceptedBy     String?
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @updatedAt
+
+  project        CpProject          @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  findings       CpRealityFinding[]
+
+  @@index([projectId, createdAt])
+  @@index([status, createdAt])
+  @@map("cp_reality_audits")
+}
+
+model CpRealityFinding {
+  id                 String           @id @default(cuid())
+  realityAuditId     String
+  claimType          String
+  claimText          String
+  result             CpFindingResult
+  evidenceJson       Json?
+  proposedNextAction String?
+  resolutionNotes    String?
+  createdAt          DateTime         @default(now())
+  updatedAt          DateTime         @updatedAt
+
+  realityAudit       CpRealityAudit   @relation(fields: [realityAuditId], references: [id], onDelete: Cascade)
+  generatedWorkItems CpWorkItem[]
+
+  @@index([realityAuditId, result])
+  @@map("cp_reality_findings")
+}
+
+model CpImportBatch {
+  id          String      @id @default(cuid())
+  projectId   String?
+  sourceType  String
+  sourceRef   String
+  sourceHash  String?
+  status      String
+  summary     String?
+  metadata    Json?
+  startedAt   DateTime?
+  finishedAt  DateTime?
+  createdAt   DateTime    @default(now())
+
+  project     CpProject?  @relation(fields: [projectId], references: [id], onDelete: SetNull)
+
+  @@index([projectId, createdAt])
+  @@map("cp_import_batches")
+}
+
+model CpExportSnapshot {
+  id          String               @id @default(cuid())
+  projectId   String?
+  triggerType CpExportTriggerType
+  status      CpExportStatus       @default(QUEUED)
+  outputPath  String
+  manifestHash String?
+  requestedBy String?
+  errorText   String?
+  startedAt   DateTime?
+  finishedAt  DateTime?
+  createdAt   DateTime             @default(now())
+
+  project     CpProject?           @relation(fields: [projectId], references: [id], onDelete: SetNull)
+
+  @@index([projectId, createdAt])
+  @@index([status, createdAt])
+  @@map("cp_export_snapshots")
+}
+
+model CpSystemEvent {
+  id          String            @id @default(cuid())
+  streamType  CpEventStreamType
+  subjectType String
+  subjectId   String
+  eventName   String
+  payload     Json?
+  actor       String?
+  occurredAt  DateTime          @default(now())
+
+  @@index([streamType, occurredAt])
+  @@index([subjectType, subjectId, occurredAt])
+  @@map("cp_system_events")
 }

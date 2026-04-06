@@ -1,18 +1,13 @@
-import { listProjectsWithCounts } from "@/lib/projects";
-import { getPortfolioExecutionBoard } from "@/lib/portfolio-execution";
-import { getPortfolioExecutionProgress } from "@/lib/portfolio-progress";
 import { Nav } from "@/components/nav";
 import ProjectsView from "./ProjectsView";
-import PortfolioExecutionBoardCard from "./PortfolioExecutionBoard";
 import Link from "next/link";
+import { getCpProjectSummaryCounts } from "@houston/shared";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
 export default async function ProjectsPage() {
-  const projects = await listProjectsWithCounts();
-  const portfolioBoard = getPortfolioExecutionBoard();
-  const progress = portfolioBoard ? await getPortfolioExecutionProgress(portfolioBoard) : null;
+  const projects = await getCpProjectSummaryCounts();
 
   return (
     <div className="min-h-screen bg-background">
@@ -21,9 +16,7 @@ export default async function ProjectsPage() {
         <div className="mb-6 flex items-center justify-between">
           <div className="space-y-2">
             <h1 className="text-3xl font-bold">Projects</h1>
-            <p className="text-muted-foreground">
-              Markdown-backed projects from the OpenClaw workspace.
-            </p>
+            <p className="text-muted-foreground">Projects with draft, paused, planning, dependency, approval, and audit workflows.</p>
           </div>
           <Link
             href="/projects/new"
@@ -32,8 +25,7 @@ export default async function ProjectsPage() {
             + New Project
           </Link>
         </div>
-        {portfolioBoard ? <PortfolioExecutionBoardCard board={portfolioBoard} progress={progress} /> : null}
-        <ProjectsView projects={projects} />
+        <ProjectsView projects={projects} apiBase="/api/v1/projects" />
       </div>
     </div>
   );

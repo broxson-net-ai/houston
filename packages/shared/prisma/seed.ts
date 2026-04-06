@@ -45,30 +45,37 @@ async function main() {
 
   console.log("Created agents:", agent1.name, agent2.name);
 
-  // Create initial pre-instructions version
-  const preInstructions = await prisma.preInstructionsVersion.create({
-    data: {
-      version: 1,
-      content:
-        "You are a helpful AI agent. Complete the assigned task thoroughly and accurately. Always respond with structured output when requested.",
-      isActive: true,
+  const project = await prisma.cpProject.upsert({
+    where: { slug: "example-control-plane-project" },
+    update: {},
+    create: {
+      slug: "example-control-plane-project",
+      title: "Example Control Plane Project",
+      status: "DRAFT",
+      defaultTrustMode: "STRICT",
+      docMode: "MANAGED",
+      summary: "Seeded example project for the control plane.",
     },
   });
-  console.log("Created pre-instructions version:", preInstructions.version);
 
-  // Create a template
-  const template = await prisma.template.create({
-    data: {
-      name: "Daily Synthesis",
-      defaultAgentId: agent1.id,
-      instructions:
-        "Synthesize the key events and insights from today. Provide a concise summary with actionable takeaways.",
-      tags: ["daily", "synthesis"],
-      priority: 0,
-      enabled: true,
-    },
+  const existingDoc = await prisma.cpProjectDoc.findFirst({
+    where: { projectId: project.id, kind: "PROJECT", isActive: true, archivedAt: null },
   });
-  console.log("Created template:", template.name);
+
+  if (!existingDoc) {
+    await prisma.cpProjectDoc.create({
+      data: {
+        projectId: project.id,
+        kind: "PROJECT",
+        title: "PROJECT",
+        contentMarkdown: "# Example Control Plane Project\n\n## Idea\n\nThis is a seeded draft project.",
+        version: 1,
+        isActive: true,
+      },
+    });
+  }
+
+  console.log("Created control-plane project:", project.title);
 
   console.log("Seeding complete!");
 }

@@ -14,10 +14,8 @@
     "db:migrate": "npm run db:migrate -w packages/shared",
     "db:seed": "npm run db:seed -w packages/shared",
     "db:generate": "npm run db:generate -w packages/shared",
-    "projects:auto-tag": "node scripts/auto-tag-templates.mjs",
-    "approval-audit:backfill": "node scripts/backfill-approval-audit-events.mjs",
-    "taskdeps:seed": "node scripts/seed-portfolio-task-dependencies.mjs",
-    "portfolio:normalize-prefixes": "node scripts/normalize-portfolio-task-prefixes.mjs",
+    "projects:ingest": "node scripts/import-projects-into-control-plane.mjs",
+    "projects:recover": "node scripts/recover-control-plane-from-markdown.mjs",
     "service:install": "./scripts/install-houston-launchagent.sh",
     "service:uninstall": "./scripts/uninstall-houston-launchagent.sh"
   },
