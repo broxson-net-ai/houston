@@ -5,7 +5,11 @@ const { promisify } = require("node:util");
 const execFileAsync = promisify(execFile);
 
 const LOCK_PATH = "/tmp/houston-autonomous-runner.lock";
-const APP_BASE_URL = (process.env.APP_BASE_URL || "http://127.0.0.1:3000").replace(/\/$/, "");
+const APP_BASE_URL = (
+  process.env.HOUSTON_INTERNAL_BASE_URL ||
+  process.env.APP_BASE_URL ||
+  "http://127.0.0.1:3000"
+).replace(/\/$/, "");
 const HOUSTON_API_KEY = process.env.HOUSTON_API_KEY;
 const MAX_RUNS_PER_CYCLE = Number.parseInt(process.env.HOUSTON_AUTONOMOUS_MAX_RUNS_PER_CYCLE || "3", 10);
 
