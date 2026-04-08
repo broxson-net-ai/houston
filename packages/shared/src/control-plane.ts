@@ -441,6 +441,48 @@ async function emitCpSystemEvent(input: {
   });
 }
 
+const CP_SYSTEM_SETTING_ID = "global";
+
+export async function getCpSystemSetting() {
+  // Upsert to guarantee singleton exists.
+  return dbAny.cpSystemSetting.upsert({
+    where: { id: CP_SYSTEM_SETTING_ID },
+    create: { id: CP_SYSTEM_SETTING_ID },
+    update: {},
+  });
+}
+
+export async function setCpAutonomyPaused(input: { paused: boolean; reason?: string | null; actor?: string | null }) {
+  const updated = await dbAny.cpSystemSetting.upsert({
+    where: { id: CP_SYSTEM_SETTING_ID },
+    create: {
+      id: CP_SYSTEM_SETTING_ID,
+      autonomyPaused: input.paused,
+      autonomyPausedReason: input.reason ?? null,
+      autonomyPausedAt: input.paused ? new Date() : null,
+    },
+    update: {
+      autonomyPaused: input.paused,
+      autonomyPausedReason: input.reason ?? null,
+      autonomyPausedAt: input.paused ? new Date() : null,
+    },
+  });
+
+  await emitCpSystemEvent({
+    streamType: "SYSTEM",
+    subjectType: "SYSTEM_SETTING",
+    subjectId: CP_SYSTEM_SETTING_ID,
+    eventName: input.paused ? "autonomy.paused" : "autonomy.resumed",
+    payload: {
+      autonomyPaused: input.paused,
+      reason: input.reason ?? null,
+    },
+    actor: input.actor ?? null,
+  });
+
+  return updated;
+}
+
 function applyPauseReadiness<T extends { project?: { status?: string | null; metadata?: unknown } | null; status?: string | null; blockedReasonCache?: unknown }>(item: T): T {
   if (!item.project || item.project.status !== CP_PROJECT_STATUS.PAUSED) return item;
   if (item.status === CP_WORK_ITEM_STATUS.DONE || item.status === CP_WORK_ITEM_STATUS.ARCHIVED) return item;

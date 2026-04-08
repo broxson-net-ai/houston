@@ -12,6 +12,7 @@ const APP_BASE_URL = (
 ).replace(/\/$/, "");
 const HOUSTON_API_KEY = process.env.HOUSTON_API_KEY;
 const MAX_RUNS_PER_CYCLE = Number.parseInt(process.env.HOUSTON_AUTONOMOUS_MAX_RUNS_PER_CYCLE || "3", 10);
+const AUTONOMOUS_ENABLED = String(process.env.HOUSTON_AUTONOMOUS_ENABLED ?? "true").toLowerCase() === "true";
 
 const SPECIAL_RUN_CONFIG = {
   "Run recurring skill telemetry quality pilot": {
@@ -83,6 +84,11 @@ function hoursSince(timestamp) {
 async function listReadyDraftOnlyWorkItems() {
   const payload = await api("/api/v1/work-items?status=READY&autonomousEligible=true");
   return (payload.data || []).filter((entry) => entry.autonomyLevel === "DRAFT_ONLY");
+}
+
+async function getAutonomySetting() {
+  const payload = await api("/api/v1/autonomy");
+  return payload.data || { autonomyPaused: false };
 }
 
 async function getWorkItem(workItemId) {
@@ -306,10 +312,23 @@ async function executeWorkItem(project, workItem) {
 }
 
 async function main() {
+  if (!AUTONOMOUS_ENABLED) {
+    console.log(JSON.stringify({ results: [{ action: "skip", reason: "HOUSTON_AUTONOMOUS_ENABLED=false" }] }, null, 2));
+    return;
+  }
+
   const lockHandle = acquireRunnerLock();
 
   try {
     const results = [];
+
+     const autonomySetting = await getAutonomySetting().catch(() => null);
+     if (autonomySetting?.autonomyPaused) {
+       results.push({ action: "skip", reason: `autonomy paused${autonomySetting.autonomyPausedReason ? `: ${autonomySetting.autonomyPausedReason}` : ""}` });
+       console.log(JSON.stringify({ results }, null, 2));
+       return;
+     }
+
     const candidates = await listReadyDraftOnlyWorkItems();
     let launched = 0;
 

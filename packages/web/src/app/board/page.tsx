@@ -50,11 +50,20 @@ export default function BoardPage() {
   const [projectId, setProjectId] = useState("");
   const [query, setQuery] = useState("");
   const [autonomousOnly, setAutonomousOnly] = useState(false);
+  const [autonomyPaused, setAutonomyPaused] = useState(false);
+  const [autonomyPausedReason, setAutonomyPausedReason] = useState<string | null>(null);
+  const [autonomyToggleBusy, setAutonomyToggleBusy] = useState(false);
   const [error, setError] = useState("");
 
   const load = useCallback(async () => {
     setError("");
     try {
+      const autonomyRes = await fetch("/api/v1/autonomy", { credentials: "include" });
+      if (autonomyRes.ok) {
+        const autonomyData = await autonomyRes.json();
+        setAutonomyPaused(Boolean(autonomyData.data?.autonomyPaused));
+        setAutonomyPausedReason(autonomyData.data?.autonomyPausedReason ?? null);
+      }
       const projectRes = await fetch("/api/v1/projects", { credentials: "include" });
       if (!projectRes.ok) throw new Error("Failed to load projects");
       const projectData = await projectRes.json();
@@ -73,6 +82,28 @@ export default function BoardPage() {
     }
   }, [autonomousOnly, projectId]);
 
+  const toggleAutonomy = useCallback(async () => {
+    setAutonomyToggleBusy(true);
+    setError("");
+    try {
+      const paused = !autonomyPaused;
+      const res = await fetch("/api/v1/autonomy", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ paused, reason: paused ? "Paused from UI" : null }),
+      });
+      if (!res.ok) throw new Error("Failed to toggle autonomy");
+      const data = await res.json();
+      setAutonomyPaused(Boolean(data.data?.autonomyPaused));
+      setAutonomyPausedReason(data.data?.autonomyPausedReason ?? null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to toggle autonomy");
+    } finally {
+      setAutonomyToggleBusy(false);
+    }
+  }, [autonomyPaused]);
+
   useEffect(() => {
     load();
   }, [load]);
@@ -86,6 +117,8 @@ export default function BoardPage() {
     source.addEventListener("work-item.updated", refresh);
     source.addEventListener("project.paused", refresh);
     source.addEventListener("project.resumed", refresh);
+    source.addEventListener("autonomy.paused", refresh);
+    source.addEventListener("autonomy.resumed", refresh);
     source.addEventListener("execution-run.created", refresh);
     source.addEventListener("approval-request.decided", refresh);
     return () => {
@@ -140,6 +173,25 @@ export default function BoardPage() {
               <p className="text-xs text-muted-foreground mt-1">
                 Autonomous items are explicitly opt-in and marked below.
               </p>
+              <div className="mt-3 flex items-center gap-3">
+                <span
+                  className={`rounded-full px-2 py-0.5 text-[11px] ${
+                    autonomyPaused ? "bg-rose-100 text-rose-800" : "bg-emerald-100 text-emerald-800"
+                  }`}
+                >
+                  autonomy {autonomyPaused ? "paused" : "running"}
+                </span>
+                {autonomyPaused && autonomyPausedReason ? (
+                  <span className="text-xs text-muted-foreground">{autonomyPausedReason}</span>
+                ) : null}
+                <button
+                  onClick={toggleAutonomy}
+                  disabled={autonomyToggleBusy}
+                  className="rounded-md border px-3 py-1 text-xs hover:bg-muted disabled:opacity-50"
+                >
+                  {autonomyPaused ? "Resume" : "Pause"}
+                </button>
+              </div>
             </div>
           <div className="flex flex-wrap gap-3">
             <input

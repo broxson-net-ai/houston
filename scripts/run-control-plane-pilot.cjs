@@ -11,7 +11,11 @@ function getArg(name) {
 }
 
 async function api(pathname, options = {}) {
-  const baseUrl = (process.env.APP_BASE_URL || "http://127.0.0.1:3000").replace(/\/$/, "");
+  const baseUrl = (
+    process.env.HOUSTON_INTERNAL_BASE_URL ||
+    process.env.APP_BASE_URL ||
+    "http://127.0.0.1:3000"
+  ).replace(/\/$/, "");
   const apiKey = process.env.HOUSTON_API_KEY;
   if (!apiKey) throw new Error("HOUSTON_API_KEY not set");
 
@@ -29,6 +33,15 @@ async function api(pathname, options = {}) {
   return data;
 }
 
+async function autonomyAllowed() {
+  const enabled = String(process.env.HOUSTON_AUTONOMOUS_ENABLED ?? "true").toLowerCase() === "true";
+  if (!enabled) return { ok: false, reason: "HOUSTON_AUTONOMOUS_ENABLED=false" };
+  const payload = await api("/api/v1/autonomy").catch(() => null);
+  if (!payload?.data) return { ok: true, reason: null };
+  if (payload.data.autonomyPaused) return { ok: false, reason: payload.data.autonomyPausedReason || "paused" };
+  return { ok: true, reason: null };
+}
+
 async function main() {
   const projectSlug = getArg("--project");
   const workItemTitle = getArg("--work-item");
@@ -37,6 +50,12 @@ async function main() {
 
   if (!projectSlug || !workItemTitle || !promptFile) {
     throw new Error("Usage: --project <slug> --work-item <title> --prompt-file <path> [--agent <id>]");
+  }
+
+  const allowed = await autonomyAllowed();
+  if (!allowed.ok) {
+    console.log(`Pilot skipped: autonomy disabled/paused (${allowed.reason})`);
+    return;
   }
 
   const promptBody = fs.readFileSync(promptFile, "utf8").trim();

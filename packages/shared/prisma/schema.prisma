@@ -276,6 +276,17 @@ model CpProjectSetting {
   @@map("cp_project_settings")
 }
 
+model CpSystemSetting {
+  id                   String   @id
+  autonomyPaused        Boolean  @default(false)
+  autonomyPausedReason  String?
+  autonomyPausedAt      DateTime?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  @@map("cp_system_settings")
+}
+
 model CpProjectDoc {
   id            String             @id @default(cuid())
   projectId     String
